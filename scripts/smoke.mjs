@@ -51,8 +51,8 @@ const pgDeltaP = client.waitFor(
     m.type === "delta" &&
     m.op === "update" &&
     String(m.id) === "1" &&
-    m.changes &&
-    Object.prototype.hasOwnProperty.call(m.changes, "name"),
+    m.fields &&
+    Object.prototype.hasOwnProperty.call(m.fields, "name"),
   20_000,
 );
 
@@ -68,8 +68,8 @@ const locDeltaP = client.waitFor(
     m.type === "delta" &&
     m.op === "update" &&
     String(m.id) === "1" &&
-    m.changes &&
-    Object.prototype.hasOwnProperty.call(m.changes, "location"),
+    m.fields &&
+    Object.prototype.hasOwnProperty.call(m.fields, "location"),
   20_000,
 );
 
@@ -81,7 +81,7 @@ if (kafkaCmd) {
     source: "http",
     entity_type: "driver",
     id: "1",
-    fields: { location: { lat: 36.16, lng: -86.78 } },
+    fields: { location: { lat: 36.16, lng: Number(`-86.${String(seq).slice(-4)}`) } },
     versions: { location: seq },
   });
   if (!result.accepted) {
@@ -95,7 +95,9 @@ if (pgCmd) {
   if (pgDelta.type !== "delta") {
     throw new Error("expected postgres name delta");
   }
-  console.log(`postgres delta ok seq=${pgDelta.seq} name=${JSON.stringify(pgDelta.changes.name)}`);
+  console.log(
+    `postgres delta ok seq=${pgDelta.seq} name=${JSON.stringify(pgDelta.fields?.name)}`,
+  );
 }
 
 const locDelta = await locDeltaP;

@@ -53,13 +53,18 @@ pub async fn wal_is_logical(pool: &PgPool) -> Result<bool> {
 }
 
 pub async fn ensure_publication(pool: &PgPool, pg_schema: &str, tables: &[String]) -> Result<()> {
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE PUBLICATION IF NOT EXISTS {}",
-        quote_ident(PUBLICATION_NAME)
-    )))
-    .execute(pool)
-    .await
-    .context("CREATE PUBLICATION")?;
+    let existing: Option<(String,)> =
+        sqlx::query_as("SELECT pubname FROM pg_publication WHERE pubname = $1")
+            .bind(PUBLICATION_NAME)
+            .fetch_optional(pool)
+            .await
+            .context("lookup publication")?;
+    if existing.is_none() {
+        sqlx::query("CREATE PUBLICATION substate")
+            .execute(pool)
+            .await
+            .context("CREATE PUBLICATION")?;
+    }
 
     for table in tables {
         let qualified = format!("{}.{}", quote_ident(pg_schema), quote_ident(table));

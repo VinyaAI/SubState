@@ -1,6 +1,6 @@
 # Multi-stage build for the SubState sidecar (`substate serve`).
 
-FROM rust:1.98-bookworm AS builder
+FROM rust:bookworm AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 COPY components ./components

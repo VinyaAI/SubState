@@ -96,7 +96,10 @@ fn parse_one(buf: &mut &[u8]) -> Result<PgOutput> {
             *buf = &[];
             Ok(PgOutput::Other)
         }
-        other => bail!("unknown pgoutput tag {}", other),
+        _ => {
+            *buf = &[];
+            Ok(PgOutput::Other)
+        }
     }
 }
 
