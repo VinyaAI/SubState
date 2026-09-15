@@ -1,0 +1,9 @@
+[package]
+name = "user_state"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cds = { workspace = true }
+subscription_index = { workspace = true }
+serde_json = { workspace = true }

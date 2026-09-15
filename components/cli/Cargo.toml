@@ -1,0 +1,27 @@
+[package]
+name = "substate-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "substate"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+axum = { workspace = true }
+cds = { workspace = true }
+clap = { workspace = true }
+delta = { workspace = true }
+dotenvy = { workspace = true }
+engine = { workspace = true }
+futures-util = { workspace = true }
+postgres_source = { workspace = true }
+schema = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+subscription_index = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+user_state = { workspace = true }

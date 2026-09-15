@@ -1,0 +1,38 @@
+# Handwritten sync schema — maps physical sources to logical entities.
+#
+# Retarget the postgres `table` and field names to match your database.
+# Example below uses Supabase table "Customers"; change to "drivers" etc. as needed.
+#
+# Subscribe / ingest use the *logical* entity name (`driver`), not the table name.
+
+entities:
+  driver:
+    identity:
+      field: id
+    sources:
+      postgres:
+        type: postgres
+        table: Customers
+      http:
+        type: http
+    fields:
+      id:
+        source: postgres
+        mode: transactional
+      name:
+        source: postgres
+        mode: transactional
+      dob:
+        source: postgres
+        mode: transactional
+      ssn:
+        source: postgres
+        mode: transactional
+      created_at:
+        source: postgres
+        mode: transactional
+      # Non-Postgres field contributed via POST /v1/ingest
+      location:
+        source: http
+        mode: latest_value
+        ordering: sequence

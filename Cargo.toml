@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "components/cds",
+    "components/subscription_index",
+    "components/user_state",
+    "components/postgres_source",
+    "components/engine",
+    "components/delta",
+    "components/schema",
+    "components/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+axum = { version = "0.8.9", features = ["ws"] }
+clap = { version = "4.5.53", features = ["derive"] }
+dotenvy = "0.15.7"
+futures-util = "0.3.34"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+serde_yaml = "0.9.34"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls-ring", "postgres", "json"] }
+tokio = { version = "1.53.1", features = ["full"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+cds = { path = "components/cds" }
+subscription_index = { path = "components/subscription_index" }
+user_state = { path = "components/user_state" }
+postgres_source = { path = "components/postgres_source" }
+engine = { path = "components/engine" }
+delta = { path = "components/delta" }
+schema = { path = "components/schema" }

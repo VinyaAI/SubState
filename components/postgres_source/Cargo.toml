@@ -1,0 +1,12 @@
+[package]
+name = "postgres_source"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+cds = { workspace = true }
+schema = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+tracing = { workspace = true }

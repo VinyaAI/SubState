@@ -1,0 +1,8 @@
+[package]
+name = "subscription_index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cds = { workspace = true }
+serde_json = { workspace = true }

@@ -1,0 +1,33 @@
+# Compose demo schema — logical entity `driver` ← postgres table `drivers`.
+# HTTP-owned `location` is merged via POST /v1/ingest.
+
+entities:
+  driver:
+    identity:
+      field: id
+    sources:
+      postgres:
+        type: postgres
+        table: drivers
+      http:
+        type: http
+    fields:
+      id:
+        source: postgres
+        mode: transactional
+      name:
+        source: postgres
+        mode: transactional
+      status:
+        source: postgres
+        mode: transactional
+      region:
+        source: postgres
+        mode: transactional
+      created_at:
+        source: postgres
+        mode: transactional
+      location:
+        source: http
+        mode: latest_value
+        ordering: sequence
