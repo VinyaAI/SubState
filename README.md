@@ -1,38 +1,114 @@
 # SubState
 
-**Status: early prototype.** A local sidecar that keeps an in-memory Current
-Database State (CDS) from your Postgres (polled) and HTTP ingest, then syncs
-equality-filtered subsets to clients over WebSocket.
+**Early prototype.** SubState sits next to Postgres, keeps a live in-memory copy
+of the rows you care about, and pushes changes to apps over WebSocket.
 
-It is not a database, not CDC, not Kafka, and not a hosted sync service.
-Subscriptions evaluate the **CDS**, not Postgres.
+Think: subscribe to “available drivers” and get updates when data changes —
+without your app polling the database itself.
 
-## What it does today
+| I want… | Do this |
+| --- | --- |
+| Just see it work | [First run](#first-run-2-minutes) (Docker Compose) |
+| Point it at my database | [Connect your own Postgres](#connect-your-own-postgres) |
+| Understand the full design | [SubState.md](SubState.md) |
 
-- Bootstraps and polls Postgres-owned fields into an in-memory CDS
-- Merges non-DB fields via `POST /v1/ingest` under a handwritten schema contract
-- Clients subscribe over `ws://…/v1/sync` and receive snapshot + ordered deltas
-- Field authority is enforced: only the owning source may update a field
+## What is this?
+
+Companies often have data in Postgres (and other places). Different users need
+different live subsets of that data.
+
+SubState:
+
+1. Reads selected tables from Postgres on a timer
+2. Merges extra fields you push over HTTP (for example GPS location)
+3. Lets clients subscribe over WebSocket and receive a snapshot, then small
+   change messages (deltas)
+
+It is **not** a database, not CDC, not Kafka, and not a hosted cloud service.
+This repo is a working local prototype.
+
+## First run (2 minutes)
+
+**You need:** [Docker](https://docs.docker.com/get-docker/) and Node.js 18+.
+
+From the repo root:
+
+```bash
+docker compose up --build
+```
+
+Leave that terminal running. In a second terminal:
+
+```bash
+curl http://127.0.0.1:8080/health
+./scripts/smoke.sh
+```
+
+**Success looks like:**
+
+- Health returns `{"status":"ok"}`
+- Smoke prints that it subscribed, ingested, and received a delta
+- Final line: `smoke passed`
+
+**If it fails:** Is Docker Desktop running? Is port `8080` free? Is Node 18+ on
+your PATH?
+
+This path starts a toy Postgres with sample data for you. You do **not** need
+Rust, a `.env` file, or your own database yet.
+
+## What just happened?
+
+Compose started two things: a small Postgres and the SubState sidecar.
+
+1. Postgres was seeded with a `drivers` table — Alice, Bob, and Carol
+2. SubState read those rows into memory (the CDS — “what’s true now”)
+3. The smoke script subscribed: *drivers where status = available*
+4. It got a **snapshot** (Alice and Carol; Bob is `busy`, so he’s excluded)
+5. It POSTed a `location` for Alice via HTTP ingest
+6. It got a **delta**: Alice’s location changed
+
+That’s the whole product loop: load state → subscribe → push a change → get an
+update.
+
+Demo data lives in [deploy/compose/init.sql](deploy/compose/init.sql). The demo
+schema is [deploy/compose/schema.yaml](deploy/compose/schema.yaml) (table
+`drivers`). The root [schema.yaml](schema.yaml) is a separate template for when
+you connect your own database.
+
+## Core ideas (simple)
 
 ```mermaid
 flowchart LR
-  pg[Postgres_poll] --> cds[CDS]
-  ingest[POST_v1_ingest] --> cds
-  cds --> idx[SubscriptionIndex]
-  idx --> us[UserState]
-  us --> deltas[ordered_deltas]
-  deltas --> ws["/v1/sync"]
+  pg[Your_Postgres] --> cds[Memory_state_CDS]
+  ingest[HTTP_ingest] --> cds
+  cds --> idx[Who_cares]
+  idx --> us[Per_subscriber_view]
+  us --> deltas[Deltas]
+  deltas --> ws[App_WebSocket]
 ```
 
-## Run against your Postgres
+| Term | Plain meaning |
+| --- | --- |
+| **CDS** | SubState’s in-memory “what’s true now” for your entities |
+| **Schema** | A YAML file that maps Postgres tables/columns → logical names clients use |
+| **Subscribe** | Ask for a filtered live view over WebSocket |
+| **Ingest** | Push non-Postgres fields (e.g. location) with `POST /v1/ingest` |
+| **Delta** | A small change: `add`, `update`, or `remove` |
 
-This is the primary path. Point the sidecar at a database you control.
+Important: subscriptions query SubState’s memory (CDS), **not** Postgres
+directly. That avoids races and keeps reconnects off your production database.
+
+## Connect your own Postgres
+
+Do this **after** Compose works. You’ll need [Rust](https://rustup.rs/), a
+Postgres URL you control, and a schema that matches your columns.
 
 ```bash
 cp components/cli/.env.example .env
-# Set DATABASE_URL to your local / Supabase / RDS Postgres
-# Set SCHEMA_PATH=./schema.yaml
-# Edit schema.yaml so postgres.table + fields match your columns
+# Edit .env:
+#   DATABASE_URL=postgresql://user:password@localhost:5432/mydb
+#   SCHEMA_PATH=./schema.yaml
+# Edit schema.yaml so table + field names match your database
 
 cargo run -p substate-cli -- serve
 curl http://127.0.0.1:8080/health
@@ -40,35 +116,34 @@ curl http://127.0.0.1:8080/health
 
 | Env | Meaning |
 | --- | --- |
-| `DATABASE_URL` | **Required.** Any Postgres connection string |
-| `SCHEMA_PATH` | **Required.** Path to handwritten sync schema YAML |
-| `CDS_SCHEMA` | Postgres schema to introspect (default: `public`) |
-| `CDS_POLL_MS` | Full-table poll interval in ms (default: `2000`) |
+| `DATABASE_URL` | **Required.** Your Postgres connection string |
+| `SCHEMA_PATH` | **Required.** Path to your sync schema YAML |
+| `CDS_SCHEMA` | Postgres schema to read (default: `public`) |
+| `CDS_POLL_MS` | How often to re-read tables, in ms (default: `2000`) |
 | `BIND_ADDR` | Listen address (default: `127.0.0.1:8080`) |
 
-Every poll cycle **re-reads every mapped table** (`SELECT to_jsonb(t)`). Fine
-for a small demo table; not appropriate for a large production table.
+Every poll cycle **re-reads every mapped table**. Fine for a small table; not
+for a huge production table.
 
-See [components/cli/.env.example](components/cli/.env.example) for the full list.
+More options: [components/cli/.env.example](components/cli/.env.example).
 
-## Schema contract
+## Schema (when you’re ready)
 
-The sync schema is the product contract. Clients subscribe and ingest by
-**logical entity name**, never by physical table name.
+Clients subscribe and ingest by **logical name** (e.g. `driver`), never by the
+physical table name.
 
-[schema.yaml](schema.yaml) is a retargetable template (logical `driver` →
-physical `Customers` is an illustration). The Compose demo uses
-[deploy/compose/schema.yaml](deploy/compose/schema.yaml) (`drivers`).
+Start from the demo shape (`drivers`), then retarget columns for your DB. Root
+[schema.yaml](schema.yaml) is a template (its example uses table `Customers`).
 
 ```yaml
 entities:
-  driver:                          # client subscribe / ingest name
+  driver:                          # name clients use
     identity:
       field: id
     sources:
       postgres:
         type: postgres
-        table: Customers           # physical table in CDS_SCHEMA
+        table: drivers             # physical table name
       http:
         type: http
     fields:
@@ -78,113 +153,95 @@ entities:
       name:
         source: postgres
         mode: transactional
+      status:
+        source: postgres
+        mode: transactional
       location:                    # only via POST /v1/ingest
         source: http
         mode: latest_value
         ordering: sequence
 ```
 
-Rules:
+Rules in short:
 
-- Identity field must appear under `fields`
-- Each field’s `source` must be a key under `sources`
-- A `postgres` source must name a `table`; that table must exist in
-  `CDS_SCHEMA` and have a primary key, or the entity is skipped
-- Only postgres-owned fields are loaded from the table; extra columns are ignored
-- HTTP-owned fields exist only after ingest and are lost on process restart
-- `flush_ms` is accepted in YAML but not implemented
-- Automatic schema discovery is out of scope (see
-  [Schema_Generation.md](Schema_Generation.md) for future direction)
+- Identity field must be listed under `fields`
+- Each field’s `source` must exist under `sources`
+- Postgres tables need a primary key, or that entity is skipped
+- Only fields owned by `postgres` are loaded from the table
+- HTTP fields exist only after ingest and are lost if SubState restarts
+- Automatic schema discovery is not built yet (see
+  [Schema_Generation.md](Schema_Generation.md))
 
 ## HTTP / WebSocket
 
-Three surfaces. Bind to localhost for local work; `/v1/*` is **unauthenticated**.
+Three endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
 
-### `GET /health`
+### Health
 
-```json
-{ "status": "ok" }
+```bash
+curl http://127.0.0.1:8080/health
+# {"status":"ok"}
 ```
 
-### `POST /v1/ingest`
+### Ingest (HTTP)
 
-```json
-{
-  "source": "http",
-  "entity_type": "driver",
-  "id": "1",
-  "fields": { "location": { "lat": 36.16, "lng": -86.78 } },
-  "versions": { "location": 1 }
-}
+Push fields owned by the `http` source:
+
+```bash
+curl -s http://127.0.0.1:8080/v1/ingest \
+  -H 'content-type: application/json' \
+  -d '{
+    "source": "http",
+    "entity_type": "driver",
+    "id": "1",
+    "fields": { "location": { "lat": 36.16, "lng": -86.78 } },
+    "versions": { "location": 1 }
+  }'
 ```
 
-- `200` → `{ "accepted": true|false, "changed_fields": [...] }` (`accepted:
-  false` when stale / no-op)
-- `400` → unknown entity/source/field or authority violation
-- `versions` are source-local; missing keys default to `stored+1`
+### Sync (WebSocket)
 
-### `GET /v1/sync` (WebSocket)
-
-**Client → server**
-
-| type | body |
-| --- | --- |
-| `subscribe` | `entity_type`, optional `where` (equality AND) |
-| `resume` | `subscription`, `resume_after` |
-| `unsubscribe` | `subscription` |
-| `ack` | `subscription`, `seq` (advances resume watermark only; no backpressure) |
-
-**Server → client:** `subscribed` → `snapshot`, then `delta` (`op`:
-`add` / `update` / `remove`, per-subscription `seq`). Resume past retained
-history → `reset` + snapshot. Bad JSON → `error`.
-
-Example subscribe:
+Connect to `ws://127.0.0.1:8080/v1/sync`, then send:
 
 ```json
 { "type": "subscribe", "entity_type": "driver", "where": { "status": "available" } }
 ```
 
-## TypeScript client (optional)
+You’ll get `subscribed`, then a `snapshot`, then `delta` messages as data
+changes. Other client messages: `resume`, `unsubscribe`, `ack`.
 
-Local package under [`clients/typescript`](clients/typescript) — build it
-yourself; not assumed published.
+Full worked example: [scripts/smoke.mjs](scripts/smoke.mjs).
+
+## Optional extras
+
+### TypeScript client
+
+Local package (build it yourself):
 
 ```bash
 cd clients/typescript && npm install && npm run build
 ```
 
-API: `connect`, `subscribe`, `resume`, `unsubscribe`, `ack`, `ingest`.
-End-to-end example against the Compose seed:
-[scripts/smoke.mjs](scripts/smoke.mjs).
+See [clients/typescript/README.md](clients/typescript/README.md).
 
-## Debug shell (optional)
+### Debug shell
 
-Same boot as `serve`, then an interactive `cds>` REPL:
+Interactive REPL with the same engine boot (needs Rust + `.env`):
 
 ```bash
 cargo run -p substate-cli -- shell
 ```
 
-Useful commands: `tables`, `show`, `get`, `subscribe`, `state`, `unsub`.
-Type `help` in the shell for the full list.
+Try `help`, `tables`, `show driver`, `subscribe driver status=available`.
 
-## Optional Compose demo
+### Compose against your DB
 
-Self-contained toy stack if you do not want to point at a real database.
-Seeds three `drivers` rows; `./scripts/smoke.sh` expects `driver` id `1`
-(Alice).
-
-```bash
-docker compose up --build
-curl http://127.0.0.1:8080/health
-./scripts/smoke.sh   # Node 18+
-```
-
-To run the Compose image against **your** database instead, override
-`DATABASE_URL` / mount your schema — see
+You can still use the Docker image but point it at an external database — see
 [deploy/compose/README.md](deploy/compose/README.md).
 
 ## Known limits
+
+This is a prototype — good for demos and learning, not production.
 
 | Today | Not yet |
 | --- | --- |
@@ -192,21 +249,18 @@ To run the Compose image against **your** database instead, override
 | Handwritten `schema.yaml` | Schema discovery / generation |
 | `postgres` + `http` ingest | Kafka, MySQL, Redis, GPS adapters |
 | In-memory CDS, subscriptions, history | Persistence across restart |
-| Equality `where` (AND) | Ranges, spatial/H3, OR, joins |
+| Equality `where` (AND only) | Ranges, spatial filters, OR, joins |
 | Last 500 deltas per subscription; then reset | Durable / unlimited resume history |
 | Ack does not pause delivery | Backpressure |
-| Broadcast lag drops events | Guaranteed delivery under load |
-| No auth on `/v1/*` | Authn/z, multi-tenant |
-| Single process, HashMaps | Scale-out, partitioning |
-| `flush_ms` in YAML unused | Latest-value coalescing |
-| Freshness bound = `CDS_POLL_MS` | Sub-second DB change visibility |
+| No auth on `/v1/*` | Auth, multi-tenant |
+| Single process | Clustering / scale-out |
 
-HTTP-owned fields and resume history do not survive process restart. Postgres
-fields are re-snapshotted on boot.
+HTTP-owned fields and resume history do not survive a restart. Postgres fields
+are loaded again on boot.
 
-## Docs
+## Learn more
 
-- [SubState.md](SubState.md) — architecture / long-term vision
-- [Schema_Generation.md](Schema_Generation.md) — future discovery & semantics
-- [deploy/compose/README.md](deploy/compose/README.md) — optional demo overrides
+- [SubState.md](SubState.md) — architecture and long-term vision
+- [Schema_Generation.md](Schema_Generation.md) — future schema discovery
+- [deploy/compose/README.md](deploy/compose/README.md) — Compose demo details
 - [clients/typescript/README.md](clients/typescript/README.md) — local TS client
