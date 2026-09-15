@@ -23,7 +23,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run headless: source follows + `/health`, `/v1/sync`, `/v1/ingest`.
+    /// Run headless: source follows + `/health`, `/v1/cds`, `/v1/sync`, `/v1/ingest`.
     Serve,
     /// Boot the engine, then drop into the interactive debug shell.
     Shell,

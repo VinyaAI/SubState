@@ -188,7 +188,7 @@ Rules in short:
 
 ## HTTP / WebSocket
 
-Three endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
+Four endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
 
 ### Health
 
@@ -196,6 +196,17 @@ Three endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
 curl http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
+
+### Current state (CDS)
+
+```bash
+curl http://127.0.0.1:8080/v1/cds
+curl http://127.0.0.1:8080/v1/cds/driver
+curl http://127.0.0.1:8080/v1/cds/driver/1
+```
+
+`GET /v1/cds` is the merged snapshot (Postgres + Kafka/HTTP fields). Add `?limit=50`
+(default 20, max 100) to change how many rows per entity type are included.
 
 ### Ingest (HTTP)
 

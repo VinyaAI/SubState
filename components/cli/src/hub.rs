@@ -1,5 +1,6 @@
 //! Delivery hub: per-subscription delta history + broadcast to shell / WebSocket.
 
+use cds::{Catalog, EntityState};
 use delta::{from_transition, snapshot_entities, Delta, DeltaHistory, ResetNeeded, SnapshotEntity};
 use engine::Engine;
 use serde_json::{Map, Value};
@@ -166,6 +167,49 @@ impl DeliveryHub {
 
     pub fn engine(&self) -> Arc<RwLock<Engine>> {
         Arc::clone(&self.engine)
+    }
+
+    pub async fn cds_catalog(&self) -> Catalog {
+        let engine = self.engine.read().await;
+        engine.cds.catalog().clone()
+    }
+
+    pub async fn cds_entity_count(&self) -> usize {
+        let engine = self.engine.read().await;
+        engine.cds.entity_count()
+    }
+
+    /// List entities of one type. `limit` is capped at 100.
+    pub async fn cds_list(
+        &self,
+        entity_type: &str,
+        limit: usize,
+    ) -> Result<(usize, Vec<(String, EntityState)>), String> {
+        let engine = self.engine.read().await;
+        if !engine.cds.has_entity_type(entity_type) && !engine.schema.has_entity(entity_type) {
+            return Err(format!("unknown entity '{entity_type}'"));
+        }
+        let cap = limit.clamp(1, 100);
+        let (total, items) = engine.cds.list(entity_type, cap);
+        Ok((
+            total,
+            items
+                .into_iter()
+                .map(|(id, state)| (id.id.clone(), state.clone()))
+                .collect(),
+        ))
+    }
+
+    pub async fn cds_get(
+        &self,
+        entity_type: &str,
+        id: &str,
+    ) -> Result<Option<EntityState>, String> {
+        let engine = self.engine.read().await;
+        if !engine.cds.has_entity_type(entity_type) && !engine.schema.has_entity(entity_type) {
+            return Err(format!("unknown entity '{entity_type}'"));
+        }
+        Ok(engine.cds.get(entity_type, id).cloned())
     }
 }
 
