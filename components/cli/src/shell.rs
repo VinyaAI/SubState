@@ -461,6 +461,7 @@ fn format_help() -> String {
         "  websocat ws://127.0.0.1:8080/v1/sync",
         "  {\"type\":\"subscribe\",\"entity_type\":\"driver\",\"where\":{\"name\":\"John Doe\"}}",
         "",
+        "Sources: Postgres CDC/poll, Kafka (KAFKA_BROKERS), HTTP ingest",
         "HTTP ingest: POST http://BIND_ADDR/v1/ingest",
         "  curl -s http://127.0.0.1:8080/v1/ingest -H 'content-type: application/json' \\",
         "    -d '{\"source\":\"http\",\"entity_type\":\"driver\",\"id\":\"1\",\"fields\":{\"location\":{\"lat\":36.16,\"lng\":-86.78}},\"versions\":{\"location\":1}}'",

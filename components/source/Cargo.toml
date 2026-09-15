@@ -1,0 +1,8 @@
+[package]
+name = "source"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+cds = { workspace = true }
+tokio = { workspace = true }

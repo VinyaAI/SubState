@@ -4,7 +4,9 @@ members = [
     "components/cds",
     "components/subscription_index",
     "components/user_state",
+    "components/source",
     "components/postgres_source",
+    "components/kafka_source",
     "components/engine",
     "components/delta",
     "components/schema",
@@ -21,6 +23,7 @@ axum = { version = "0.8.9", features = ["ws"] }
 clap = { version = "4.5.53", features = ["derive"] }
 dotenvy = "0.15.7"
 futures-util = "0.3.34"
+rskafka = "0.6.0"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 serde_yaml = "0.9.34"
@@ -32,7 +35,9 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 cds = { path = "components/cds" }
 subscription_index = { path = "components/subscription_index" }
 user_state = { path = "components/user_state" }
+source = { path = "components/source" }
 postgres_source = { path = "components/postgres_source" }
+kafka_source = { path = "components/kafka_source" }
 engine = { path = "components/engine" }
 delta = { path = "components/delta" }
 schema = { path = "components/schema" }

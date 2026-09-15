@@ -66,6 +66,40 @@ impl DeliveryHub {
         Ok(changed_fields)
     }
 
+    /// Delete an entity (CDC delete or poll reconcile).
+    pub async fn remove_and_publish(&self, entity_type: &str, id: &str) {
+        let transitions = {
+            let mut engine = self.engine.write().await;
+            engine.remove_entity(entity_type, id)
+        };
+        self.publish_transitions(transitions).await;
+    }
+
+    /// Drop CDS identities of `entity_type` that are not in `present`.
+    pub async fn reconcile_and_publish(
+        &self,
+        entity_type: &str,
+        present: &HashSet<String>,
+    ) {
+        let transitions = {
+            let mut engine = self.engine.write().await;
+            let existing: Vec<String> = engine
+                .cds
+                .ids_for_type(entity_type)
+                .into_iter()
+                .map(|id| id.id)
+                .collect();
+            let mut transitions = Vec::new();
+            for id in existing {
+                if !present.contains(&id) {
+                    transitions.extend(engine.remove_entity(entity_type, &id));
+                }
+            }
+            transitions
+        };
+        self.publish_transitions(transitions).await;
+    }
+
     /// Create engine subscription + history; return id and snapshot entities.
     pub async fn subscribe(
         &self,

@@ -1,5 +1,7 @@
-# Compose demo schema — logical entity `driver` ← postgres table `drivers`.
-# HTTP-owned `location` is merged via POST /v1/ingest.
+# Compose demo: Postgres (CDC) + Kafka location + HTTP escape hatch.
+#
+# Clients subscribe to logical entity `driver`.
+# `location` is owned by the Kafka `gps` source (topic driver-locations).
 
 entities:
   driver:
@@ -9,6 +11,10 @@ entities:
       postgres:
         type: postgres
         table: drivers
+      gps:
+        type: kafka
+        topic: driver-locations
+        entity_key: driver_id
       http:
         type: http
     fields:
@@ -28,6 +34,6 @@ entities:
         source: postgres
         mode: transactional
       location:
-        source: http
+        source: gps
         mode: latest_value
         ordering: sequence
