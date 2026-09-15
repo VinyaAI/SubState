@@ -1,14 +1,15 @@
 [package]
-name = "postgres_source"
+name = "kafka_source"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
 cds = { workspace = true }
+futures-util = { workspace = true }
+rskafka = { workspace = true }
 schema = { workspace = true }
 serde_json = { workspace = true }
 source = { workspace = true }
-sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

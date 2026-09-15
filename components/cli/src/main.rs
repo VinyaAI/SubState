@@ -1,12 +1,13 @@
 //! SubState CLI (`substate`).
 //!
 //! Company-shaped entrypoints:
-//! - `substate serve` — headless sidecar (poller + HTTP/WS)
+//! - `substate serve` — headless sidecar (source follows + HTTP/WS)
 //! - `substate shell` — same boot, then interactive `cds>` debug REPL
 
 mod boot;
+mod config;
+mod dispatch;
 mod hub;
-mod poll;
 mod shell;
 mod ws;
 
@@ -22,7 +23,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Run headless: Postgres poller + `/health`, `/v1/sync`, `/v1/ingest`.
+    /// Run headless: source follows + `/health`, `/v1/cds`, `/v1/sync`, `/v1/ingest`.
     Serve,
     /// Boot the engine, then drop into the interactive debug shell.
     Shell,
@@ -46,7 +47,7 @@ async fn run_serve() -> Result<()> {
         bind_addr = %runtime.bind_addr,
         "substate serve ready (Ctrl+C to stop)"
     );
-    // Park forever while background poller + Axum tasks run.
+    // Park forever while background follows + Axum tasks run.
     std::future::pending::<()>().await;
     Ok(())
 }

@@ -376,7 +376,8 @@ Backpressure is intentionally deferred.
                  POSTGRES
             drivers + jobs
                   │
-          startup bootstrap
+          snapshot + CDC
+           (poll fallback)
                   │
                   ▼
             ┌───────────┐
@@ -384,9 +385,9 @@ Backpressure is intentionally deferred.
             └─────┬─────┘
               ▲         ▲
               │         │
-      HTTP / SDK     GPS simulator
-      status/job      location
-       changes        updates
+      HTTP / SDK       Kafka
+      any source     location /
+       via ingest    data bus
               │         │
               └────┬────┘
                    │
@@ -404,16 +405,15 @@ Backpressure is intentionally deferred.
                    ▼
             Dispatcher Map
 
-Postgres bootstraps drivers and jobs into the CDS once at startup.
+Postgres bootstraps mapped tables into the CDS at startup, then follows
+the WAL through a `pgoutput` slot when `wal_level=logical`. Otherwise it
+re-reads tables on a timer.
 
-Transactional changes made by the demo application are written to
-Postgres and also reported to SubState through a small HTTP/SDK
-ingestion path.
+Kafka consumers map JSON messages onto schema-owned fields. Anything else
+can POST `/v1/ingest`. All three paths become the same inbox message
+before the CDS merges.
 
-GPS updates arrive through a simulated high-frequency feed.
-
-Later, Postgres CDC can replace explicit HTTP/SDK notification without
-changing the core architecture.
+The core architecture does not change when a new adapter is added.
 
 17. Prototype Technology
 

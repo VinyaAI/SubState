@@ -16,8 +16,10 @@ delta = { workspace = true }
 dotenvy = { workspace = true }
 engine = { workspace = true }
 futures-util = { workspace = true }
+kafka_source = { workspace = true }
 postgres_source = { workspace = true }
 schema = { workspace = true }
+source = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 subscription_index = { workspace = true }

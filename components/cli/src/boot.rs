@@ -1,23 +1,28 @@
-//! Shared process boot: dotenv, config, schema, CDS snapshot, poller, HTTP/WS.
+//! Shared process boot: dotenv, config, schema, CDS snapshot, source follows, HTTP/WS.
 
+use crate::config::{PostgresFollowMode, RuntimeConfig};
+use crate::dispatch;
 use crate::hub::DeliveryHub;
-use crate::poll;
 use crate::ws;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use engine::Engine;
-use postgres_source::Config;
-use schema::SyncSchema;
+use kafka_source::KafkaFollow;
+use postgres_source::cdc::{
+    ensure_publication, prepare_slot, wal_is_logical, PostgresCdcFollow,
+};
+use postgres_source::poll::PostgresPollFollow;
+use schema::{SyncSchema, SOURCE_KAFKA, SOURCE_POSTGRES};
+use source::Follow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{mpsc, RwLock};
 use tokio::task::JoinHandle;
 use tracing_subscriber::EnvFilter;
 
 pub struct Runtime {
     pub hub: Arc<DeliveryHub>,
     pub bind_addr: String,
-    _poller: JoinHandle<()>,
-    _server: JoinHandle<()>,
+    _tasks: Vec<JoinHandle<()>>,
 }
 
 /// Load `.env` from `DOTENV_PATH`, then cwd `./.env`, then `components/cli/.env`.
@@ -41,51 +46,127 @@ pub fn init_tracing() {
         .init();
 }
 
-/// Connect, snapshot, spawn poller + Axum. Caller decides serve-forever vs shell.
+/// Connect, snapshot, spawn follows + Axum. Caller decides serve-forever vs shell.
 pub async fn start() -> Result<Runtime> {
-    let config = Config::from_env()?;
+    let config = RuntimeConfig::from_env()?;
     let schema_path = resolve_schema_path(&config.schema_path);
     let sync_schema = Arc::new(
         SyncSchema::load_path(&schema_path)
             .with_context(|| format!("SCHEMA_PATH={}", schema_path.display()))?,
     );
 
+    let wants_postgres = sync_schema.has_source_type(SOURCE_POSTGRES);
+    let wants_kafka = sync_schema.has_source_type(SOURCE_KAFKA);
+
     tracing::info!(
         schema = %config.schema,
         schema_path = %schema_path.display(),
         entities = sync_schema.entities.len(),
-        poll_ms = config.poll_ms,
+        postgres = wants_postgres,
+        kafka = wants_kafka,
+        postgres_follow = ?config.postgres_follow,
         bind_addr = %config.bind_addr,
         "starting SubState"
     );
 
-    let pool = postgres_source::connect(&config.database_url).await?;
-    let cds = postgres_source::snapshot(&pool, &config, &sync_schema).await?;
+    if wants_postgres && config.database_url.is_none() {
+        bail!("schema has a postgres source but DATABASE_URL is not set");
+    }
+    if wants_kafka && config.kafka_brokers.is_none() {
+        bail!("schema has a kafka source but KAFKA_BROKERS is not set");
+    }
+
+    let (cds, pg_pool) = if wants_postgres {
+        let url = config.database_url.as_deref().unwrap();
+        let pool = postgres_source::connect(url).await?;
+        let snap = config.postgres_snapshot_config();
+        let cds = postgres_source::snapshot(&pool, &snap, &sync_schema).await?;
+        (cds, Some(pool))
+    } else {
+        (
+            postgres_source::catalog_only(config.schema.clone(), &sync_schema),
+            None,
+        )
+    };
+
     let engine = Arc::new(RwLock::new(Engine::new(cds, (*sync_schema).clone())));
     let hub = Arc::new(DeliveryHub::new(Arc::clone(&engine)));
 
-    let poller = poll::spawn(
-        pool,
-        config.schema.clone(),
-        config.poll_ms,
-        Arc::clone(&sync_schema),
-        Arc::clone(&hub),
-    );
+    let (tx, rx) = mpsc::channel(1024);
+    let mut tasks = vec![dispatch::spawn(Arc::clone(&hub), rx)];
+
+    if let Some(pool) = pg_pool {
+        tasks.push(start_postgres_follow(&config, &sync_schema, pool, tx.clone()).await?);
+    }
+
+    if wants_kafka {
+        let follow = KafkaFollow {
+            brokers: config.kafka_brokers.clone().unwrap(),
+            sync_schema: Arc::clone(&sync_schema),
+        };
+        tasks.push(Box::new(follow).spawn(tx));
+    }
 
     let server_hub = Arc::clone(&hub);
     let bind_addr = config.bind_addr.clone();
-    let server = tokio::spawn(async move {
+    tasks.push(tokio::spawn(async move {
         if let Err(err) = ws::serve(&bind_addr, server_hub).await {
             tracing::error!(error = %err, "sync API exited");
         }
-    });
+    }));
 
     Ok(Runtime {
         hub,
         bind_addr: config.bind_addr,
-        _poller: poller,
-        _server: server,
+        _tasks: tasks,
     })
+}
+
+async fn start_postgres_follow(
+    config: &RuntimeConfig,
+    sync_schema: &Arc<SyncSchema>,
+    pool: postgres_source::PgPool,
+    tx: mpsc::Sender<source::SourceEvent>,
+) -> Result<JoinHandle<()>> {
+    let poll = || {
+        PostgresPollFollow {
+            pool: pool.clone(),
+            pg_schema: config.schema.clone(),
+            poll_ms: config.poll_ms,
+            sync_schema: Arc::clone(sync_schema),
+        }
+    };
+
+    match config.postgres_follow {
+        PostgresFollowMode::Poll => Ok(Box::new(poll()).spawn(tx)),
+        PostgresFollowMode::Cdc | PostgresFollowMode::Auto => {
+            let try_cdc = async {
+                if !wal_is_logical(&pool).await? {
+                    bail!("wal_level is not logical");
+                }
+                let tables = sync_schema.postgres_tables();
+                ensure_publication(&pool, &config.schema, &tables).await?;
+                prepare_slot(&pool).await?;
+                Ok::<(), anyhow::Error>(())
+            };
+
+            match try_cdc.await {
+                Ok(()) => {
+                    let follow = PostgresCdcFollow {
+                        pool: pool.clone(),
+                        sync_schema: Arc::clone(sync_schema),
+                        interval_ms: 200,
+                    };
+                    Ok(Box::new(follow).spawn(tx))
+                }
+                Err(err) if config.postgres_follow == PostgresFollowMode::Auto => {
+                    tracing::warn!(error = %err, "postgres CDC unavailable; falling back to poll");
+                    Ok(Box::new(poll()).spawn(tx))
+                }
+                Err(err) => Err(err).context("POSTGRES_FOLLOW=cdc"),
+            }
+        }
+    }
 }
 
 fn resolve_schema_path(configured: &Path) -> PathBuf {

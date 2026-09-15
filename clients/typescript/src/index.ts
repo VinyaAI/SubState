@@ -160,6 +160,17 @@ export async function connect(url: string): Promise<SubStateClient> {
   return client;
 }
 
+/** HTTP dump of the current CDS (merged snapshot). */
+export async function cds(
+  baseUrl: string,
+  path: string = "",
+): Promise<unknown> {
+  const suffix = path ? `/v1/cds/${path.replace(/^\//, "")}` : "/v1/cds";
+  const url = `${baseUrl.replace(/\/$/, "")}${suffix}`;
+  const response = await fetch(url);
+  return response.json();
+}
+
 /** HTTP ingest against a SubState base URL (e.g. http://127.0.0.1:8080). */
 export async function ingest(
   baseUrl: string,

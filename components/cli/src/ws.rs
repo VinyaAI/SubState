@@ -2,7 +2,8 @@
 
 use crate::hub::{DeliveryHub, SessionSubs};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
+use axum::extract::{Path, Query, State};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -22,6 +23,9 @@ pub struct AppState {
 pub fn router(hub: Arc<DeliveryHub>) -> Router {
     Router::new()
         .route("/health", get(health))
+        .route("/v1/cds", get(cds_dump))
+        .route("/v1/cds/{entity}", get(cds_list))
+        .route("/v1/cds/{entity}/{id}", get(cds_get))
         .route("/v1/sync", get(ws_upgrade))
         .route("/v1/ingest", post(ingest))
         .with_state(AppState { hub })
@@ -29,13 +33,120 @@ pub fn router(hub: Arc<DeliveryHub>) -> Router {
 
 pub async fn serve(bind_addr: &str, hub: Arc<DeliveryHub>) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
-    info!(%bind_addr, "sync API listening (ws /v1/sync, POST /v1/ingest)");
+    info!(%bind_addr, "sync API listening (GET /v1/cds, ws /v1/sync, POST /v1/ingest)");
     axum::serve(listener, router(hub)).await?;
     Ok(())
 }
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+#[derive(Debug, Deserialize)]
+struct CdsListQuery {
+    #[serde(default = "default_cds_limit")]
+    limit: usize,
+}
+
+fn default_cds_limit() -> usize {
+    20
+}
+
+fn entity_json(id: String, state: cds::EntityState) -> Value {
+    let mut value = json!({
+        "id": id,
+        "fields": state.fields,
+    });
+    if !state.field_meta.is_empty() {
+        value["field_meta"] = serde_json::to_value(state.field_meta).unwrap_or(Value::Null);
+    }
+    value
+}
+
+/// GET /v1/cds — catalog plus current entities (per-type limit, default 20, max 100).
+async fn cds_dump(
+    State(state): State<AppState>,
+    Query(query): Query<CdsListQuery>,
+) -> Json<Value> {
+    let catalog = state.hub.cds_catalog().await;
+    let entity_count = state.hub.cds_entity_count().await;
+    let mut entities = Vec::new();
+    for table in &catalog.tables {
+        let (total, items) = state
+            .hub
+            .cds_list(&table.name, query.limit)
+            .await
+            .unwrap_or((0, Vec::new()));
+        entities.push(json!({
+            "name": table.name,
+            "primary_key": table.primary_key,
+            "columns": table.columns,
+            "row_count": table.row_count,
+            "total": total,
+            "items": items
+                .into_iter()
+                .map(|(id, entity)| entity_json(id, entity))
+                .collect::<Vec<_>>(),
+        }));
+    }
+    Json(json!({
+        "schema": catalog.schema,
+        "entity_count": entity_count,
+        "limit": query.limit.clamp(1, 100),
+        "entities": entities,
+        "skipped": catalog.skipped,
+    }))
+}
+
+/// GET /v1/cds/:entity
+async fn cds_list(
+    State(state): State<AppState>,
+    Path(entity): Path<String>,
+    Query(query): Query<CdsListQuery>,
+) -> impl IntoResponse {
+    match state.hub.cds_list(&entity, query.limit).await {
+        Ok((total, items)) => (
+            StatusCode::OK,
+            Json(json!({
+                "entity": entity,
+                "total": total,
+                "limit": query.limit.clamp(1, 100),
+                "items": items
+                    .into_iter()
+                    .map(|(id, entity)| entity_json(id, entity))
+                    .collect::<Vec<_>>(),
+            })),
+        ),
+        Err(message) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": message })),
+        ),
+    }
+}
+
+/// GET /v1/cds/:entity/:id
+async fn cds_get(
+    State(state): State<AppState>,
+    Path((entity, id)): Path<(String, String)>,
+) -> impl IntoResponse {
+    match state.hub.cds_get(&entity, &id).await {
+        Ok(Some(state)) => (
+            StatusCode::OK,
+            Json(json!({
+                "entity": entity,
+                "id": id,
+                "fields": state.fields,
+                "field_meta": state.field_meta,
+            })),
+        ),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!("entity {entity}:{id} not found"),
+            })),
+        ),
+        Err(message) => (StatusCode::NOT_FOUND, Json(json!({ "error": message }))),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -290,4 +401,67 @@ async fn send_json(
         .send(Message::Text(value.to_string().into()))
         .await
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cds::{EntityId, EntityState, TableCatalog};
+    use engine::Engine;
+    use schema::SyncSchema;
+    use tokio::sync::RwLock;
+
+    fn sample_hub() -> Arc<DeliveryHub> {
+        let schema = SyncSchema::from_yaml_str(
+            r#"
+entities:
+  driver:
+    identity: { field: id }
+    sources:
+      postgres: { type: postgres, table: drivers }
+    fields:
+      id: { source: postgres }
+      name: { source: postgres }
+"#,
+        )
+        .unwrap();
+        let mut cds = cds::Cds::new("public");
+        cds.add_table(TableCatalog {
+            name: "driver".to_string(),
+            primary_key: vec!["id".to_string()],
+            columns: vec!["id".to_string(), "name".to_string()],
+            row_count: 1,
+        });
+        cds.insert(
+            EntityId {
+                entity_type: "driver".to_string(),
+                id: "1".to_string(),
+            },
+            EntityState::from_fields(
+                json!({"id": 1, "name": "Alice"})
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        );
+        Arc::new(DeliveryHub::new(Arc::new(RwLock::new(Engine::new(
+            cds, schema,
+        )))))
+    }
+
+    #[tokio::test]
+    async fn cds_inspect_lists_known_entity() {
+        let hub = sample_hub();
+        let catalog = hub.cds_catalog().await;
+        assert_eq!(catalog.tables[0].name, "driver");
+        assert_eq!(hub.cds_entity_count().await, 1);
+        let (total, items) = hub.cds_list("driver", 20).await.unwrap();
+        assert_eq!(total, 1);
+        assert_eq!(items[0].0, "1");
+        assert_eq!(items[0].1.fields["name"], json!("Alice"));
+        let got = hub.cds_get("driver", "1").await.unwrap().unwrap();
+        assert_eq!(got.fields["name"], json!("Alice"));
+        assert!(hub.cds_get("driver", "missing").await.unwrap().is_none());
+        assert!(hub.cds_list("unknown", 10).await.is_err());
+    }
 }

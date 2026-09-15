@@ -1,7 +1,7 @@
 {
   "name": "@substate/client",
   "version": "0.1.0",
-  "description": "Minimal TypeScript client for SubState WebSocket sync + HTTP ingest",
+  "description": "Minimal TypeScript client for SubState WebSocket sync, CDS inspect, and HTTP ingest",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

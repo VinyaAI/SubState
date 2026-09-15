@@ -3,7 +3,10 @@
 //! Only fields owned by the postgres source (per sync schema) are loaded.
 //! Logical entity types come from the schema, not raw table names.
 
+pub mod cdc;
 pub mod config;
+pub mod pgoutput;
+pub mod poll;
 
 pub use config::Config;
 pub use sqlx::PgPool;
@@ -97,6 +100,7 @@ pub async fn snapshot(
             &owned,
             &pk,
             rows,
+            None,
         );
 
         for update in updates {
@@ -153,7 +157,25 @@ pub async fn snapshot(
     Ok(cds)
 }
 
+/// Empty CDS catalog for schemas with no Postgres source (HTTP / Kafka only).
+pub fn catalog_only(schema_name: impl Into<String>, sync_schema: &SyncSchema) -> Cds {
+    let mut cds = Cds::new(schema_name);
+    for (logical_name, entity) in &sync_schema.entities {
+        let field_names: Vec<String> = entity.fields.keys().cloned().collect();
+        cds.add_table(TableCatalog {
+            name: logical_name.clone(),
+            primary_key: vec![entity.identity.field.clone()],
+            columns: field_names,
+            row_count: 0,
+        });
+    }
+    cds
+}
+
 /// Project physical rows into postgres-owned [`SourceUpdate`]s for one logical entity.
+///
+/// `version` is applied to every field when set (CDC LSN). Otherwise versions stay empty
+/// and the CDS assigns `stored+1`.
 ///
 /// Returns `(updates, present_entity_ids)`.
 pub fn project_postgres_rows(
@@ -163,6 +185,7 @@ pub fn project_postgres_rows(
     owned_fields: &[&str],
     primary_key: &[String],
     rows: Vec<Map<String, Value>>,
+    version: Option<u64>,
 ) -> (Vec<SourceUpdate>, HashSet<String>) {
     let owned: HashSet<&str> = owned_fields.iter().copied().collect();
     let mut updates = Vec::new();
@@ -198,12 +221,17 @@ pub fn project_postgres_rows(
             }
         }
 
+        let versions = match version {
+            Some(v) => fields.keys().cloned().map(|k| (k, v)).collect(),
+            None => HashMap::new(),
+        };
+
         updates.push(SourceUpdate {
             source: source_id.to_string(),
             entity_type: logical_entity.to_string(),
             id,
             fields,
-            versions: HashMap::new(),
+            versions,
         });
     }
 
@@ -353,11 +381,13 @@ mod tests {
                     .cloned()
                     .unwrap(),
             ],
+            Some(99),
         );
         assert_eq!(present.len(), 1);
         assert_eq!(updates.len(), 1);
         assert!(!updates[0].fields.contains_key("extra"));
         assert_eq!(updates[0].fields["name"], json!("Alice"));
         assert_eq!(updates[0].entity_type, "driver");
+        assert_eq!(updates[0].versions.get("name"), Some(&99));
     }
 }

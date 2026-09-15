@@ -1,7 +1,7 @@
 # SubState
 
-**Early prototype.** SubState sits next to Postgres, keeps a live in-memory copy
-of the rows you care about, and pushes changes to apps over WebSocket.
+**Early prototype.** SubState sits next to your systems, keeps a live in-memory
+copy of the entities you care about, and pushes changes to apps over WebSocket.
 
 Think: subscribe to “available drivers” and get updates when data changes —
 without your app polling the database itself.
@@ -19,13 +19,14 @@ different live subsets of that data.
 
 SubState:
 
-1. Reads selected tables from Postgres on a timer
-2. Merges extra fields you push over HTTP (for example GPS location)
+1. Snapshots selected Postgres tables, then follows changes (logical CDC when
+   `wal_level=logical`, otherwise a table poll)
+2. Merges extra fields from Kafka topics or `POST /v1/ingest`
 3. Lets clients subscribe over WebSocket and receive a snapshot, then small
    change messages (deltas)
 
-It is **not** a database, not CDC, not Kafka, and not a hosted cloud service.
-This repo is a working local prototype.
+It is **not** a database and not a hosted cloud service. Sources speak one inbox
+(`SourceUpdate`); the CDS merges. This repo is a working local prototype.
 
 ## First run (2 minutes)
 
@@ -47,7 +48,8 @@ curl http://127.0.0.1:8080/health
 **Success looks like:**
 
 - Health returns `{"status":"ok"}`
-- Smoke prints that it subscribed, ingested, and received a delta
+- Smoke prints that it subscribed, applied a Postgres change, received a Kafka
+  location delta
 - Final line: `smoke passed`
 
 **If it fails:** Is Docker Desktop running? Is port `8080` free? Is Node 18+ on
@@ -58,17 +60,20 @@ Rust, a `.env` file, or your own database yet.
 
 ## What just happened?
 
-Compose started two things: a small Postgres and the SubState sidecar.
+Compose started Postgres (logical WAL), Redpanda (Kafka API), a location
+producer, and the SubState sidecar.
 
 1. Postgres was seeded with a `drivers` table — Alice, Bob, and Carol
 2. SubState read those rows into memory (the CDS — “what’s true now”)
-3. The smoke script subscribed: *drivers where status = available*
-4. It got a **snapshot** (Alice and Carol; Bob is `busy`, so he’s excluded)
-5. It POSTed a `location` for Alice via HTTP ingest
-6. It got a **delta**: Alice’s location changed
+3. The smoke script subscribed: *drivers where region = nashville*
+4. It got a **snapshot** (Alice and Bob)
+5. It `UPDATE`d Alice’s name in Postgres; CDC emitted a **delta**
+6. It produced a `location` on the Kafka topic; that merged onto the same driver
 
-That’s the whole product loop: load state → subscribe → push a change → get an
-update.
+That’s the product loop: load state → subscribe → source change → delta.
+
+HTTP ingest is still there for sources you do not have an adapter for. The root
+[schema.yaml](schema.yaml) keeps `location` on `http` for runs without a broker.
 
 Demo data lives in [deploy/compose/init.sql](deploy/compose/init.sql). The demo
 schema is [deploy/compose/schema.yaml](deploy/compose/schema.yaml) (table
@@ -80,6 +85,7 @@ you connect your own database.
 ```mermaid
 flowchart LR
   pg[Your_Postgres] --> cds[Memory_state_CDS]
+  kafka[Kafka_topic] --> cds
   ingest[HTTP_ingest] --> cds
   cds --> idx[Who_cares]
   idx --> us[Per_subscriber_view]
@@ -92,7 +98,7 @@ flowchart LR
 | **CDS** | SubState’s in-memory “what’s true now” for your entities |
 | **Schema** | A YAML file that maps Postgres tables/columns → logical names clients use |
 | **Subscribe** | Ask for a filtered live view over WebSocket |
-| **Ingest** | Push non-Postgres fields (e.g. location) with `POST /v1/ingest` |
+| **Ingest** | Push any source-owned fields with `POST /v1/ingest` (universal fallback) |
 | **Delta** | A small change: `add`, `update`, or `remove` |
 
 Important: subscriptions query SubState’s memory (CDS), **not** Postgres
@@ -119,11 +125,13 @@ curl http://127.0.0.1:8080/health
 | `DATABASE_URL` | **Required.** Your Postgres connection string |
 | `SCHEMA_PATH` | **Required.** Path to your sync schema YAML |
 | `CDS_SCHEMA` | Postgres schema to read (default: `public`) |
-| `CDS_POLL_MS` | How often to re-read tables, in ms (default: `2000`) |
+| `CDS_POLL_MS` | Poll interval if CDC is unavailable (default: `2000`) |
+| `POSTGRES_FOLLOW` | `auto` (default), `cdc`, or `poll` |
+| `KAFKA_BROKERS` | Required when the schema has a `kafka` source |
 | `BIND_ADDR` | Listen address (default: `127.0.0.1:8080`) |
 
-Every poll cycle **re-reads every mapped table**. Fine for a small table; not
-for a huge production table.
+`POSTGRES_FOLLOW=auto` tries logical decoding (`pgoutput` slot `substate`) and
+falls back to a full-table poll if `wal_level` is not `logical`.
 
 More options: [components/cli/.env.example](components/cli/.env.example).
 
@@ -144,6 +152,10 @@ entities:
       postgres:
         type: postgres
         table: drivers             # physical table name
+      gps:
+        type: kafka
+        topic: driver-locations
+        entity_key: driver_id
       http:
         type: http
     fields:
@@ -156,8 +168,8 @@ entities:
       status:
         source: postgres
         mode: transactional
-      location:                    # only via POST /v1/ingest
-        source: http
+      location:                    # Kafka in Compose; http in the root template
+        source: gps
         mode: latest_value
         ordering: sequence
 ```
@@ -168,13 +180,15 @@ Rules in short:
 - Each field’s `source` must exist under `sources`
 - Postgres tables need a primary key, or that entity is skipped
 - Only fields owned by `postgres` are loaded from the table
-- HTTP fields exist only after ingest and are lost if SubState restarts
+- Kafka/HTTP fields appear when a message or ingest arrives and are lost if
+  SubState restarts
+- Supported source types: `postgres`, `kafka`, `http`
 - Automatic schema discovery is not built yet (see
   [Schema_Generation.md](Schema_Generation.md))
 
 ## HTTP / WebSocket
 
-Three endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
+Four endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
 
 ### Health
 
@@ -183,9 +197,20 @@ curl http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
 
+### Current state (CDS)
+
+```bash
+curl http://127.0.0.1:8080/v1/cds
+curl http://127.0.0.1:8080/v1/cds/driver
+curl http://127.0.0.1:8080/v1/cds/driver/1
+```
+
+`GET /v1/cds` is the merged snapshot (Postgres + Kafka/HTTP fields). Add `?limit=50`
+(default 20, max 100) to change how many rows per entity type are included.
+
 ### Ingest (HTTP)
 
-Push fields owned by the `http` source:
+Push fields owned by the named source (usually `http`):
 
 ```bash
 curl -s http://127.0.0.1:8080/v1/ingest \
@@ -245,9 +270,9 @@ This is a prototype — good for demos and learning, not production.
 
 | Today | Not yet |
 | --- | --- |
-| Postgres poll (full table) | CDC / WAL / logical replication |
+| Postgres snapshot + CDC (`pgoutput`) or poll fallback | MySQL / Mongo / Oracle adapters |
+| Kafka JSON consumer + HTTP ingest | Schema Registry / Avro / Debezium envelope |
 | Handwritten `schema.yaml` | Schema discovery / generation |
-| `postgres` + `http` ingest | Kafka, MySQL, Redis, GPS adapters |
 | In-memory CDS, subscriptions, history | Persistence across restart |
 | Equality `where` (AND only) | Ranges, spatial filters, OR, joins |
 | Last 500 deltas per subscription; then reset | Durable / unlimited resume history |

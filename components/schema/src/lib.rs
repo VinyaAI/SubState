@@ -33,6 +33,21 @@ pub struct SourceDef {
     /// Physical table name when `source_type` is `postgres`.
     #[serde(default)]
     pub table: Option<String>,
+    /// Topic name when `source_type` is `kafka`.
+    #[serde(default)]
+    pub topic: Option<String>,
+    /// Payload field that holds the logical entity id when `source_type` is `kafka`.
+    #[serde(default)]
+    pub entity_key: Option<String>,
+}
+
+/// One Kafka topic mapped onto a logical entity.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KafkaBinding {
+    pub source_id: String,
+    pub entity_type: String,
+    pub topic: String,
+    pub entity_key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -57,6 +72,10 @@ pub enum FieldMode {
     Transactional,
     LatestValue,
 }
+
+pub const SOURCE_POSTGRES: &str = "postgres";
+pub const SOURCE_KAFKA: &str = "kafka";
+pub const SOURCE_HTTP: &str = "http";
 
 impl SyncSchema {
     pub fn from_yaml_str(yaml: &str) -> Result<Self> {
@@ -99,11 +118,33 @@ impl SyncSchema {
                 }
             }
             for (source_id, source) in &entity.sources {
-                if source.source_type == "postgres" && source.table.as_ref().map_or(true, |t| t.is_empty())
-                {
-                    bail!(
-                        "entity '{name}' postgres source '{source_id}' requires a table name"
-                    );
+                match source.source_type.as_str() {
+                    SOURCE_POSTGRES => {
+                        if source.table.as_ref().map_or(true, |t| t.is_empty()) {
+                            bail!(
+                                "entity '{name}' postgres source '{source_id}' requires a table name"
+                            );
+                        }
+                    }
+                    SOURCE_KAFKA => {
+                        if source.topic.as_ref().map_or(true, |t| t.is_empty()) {
+                            bail!(
+                                "entity '{name}' kafka source '{source_id}' requires a topic"
+                            );
+                        }
+                        if source.entity_key.as_ref().map_or(true, |k| k.is_empty()) {
+                            bail!(
+                                "entity '{name}' kafka source '{source_id}' requires an entity_key"
+                            );
+                        }
+                    }
+                    SOURCE_HTTP => {}
+                    other => {
+                        bail!(
+                            "entity '{name}' source '{source_id}' has unsupported type '{other}' \
+                             (supported: postgres, kafka, http)"
+                        );
+                    }
                 }
             }
         }
@@ -118,14 +159,31 @@ impl SyncSchema {
         self.entities.contains_key(name)
     }
 
-    /// Logical entity whose postgres source maps to this physical table, if any.
-    pub fn entity_for_table(&self, table: &str) -> Option<(&str, &EntityDef)> {
-        self.entities.iter().find_map(|(name, entity)| {
+    pub fn has_source_type(&self, source_type: &str) -> bool {
+        self.entities.values().any(|entity| {
             entity
                 .sources
                 .values()
-                .any(|s| s.source_type == "postgres" && s.table.as_deref() == Some(table))
-                .then_some((name.as_str(), entity))
+                .any(|source| source.source_type == source_type)
+        })
+    }
+
+    /// Logical entity whose postgres source maps to this physical table, if any.
+    pub fn entity_for_table(&self, table: &str) -> Option<(&str, &EntityDef)> {
+        self.entity_and_source_for_table(table)
+            .map(|(name, _, entity)| (name, entity))
+    }
+
+    /// Logical entity + postgres source id for a physical table.
+    pub fn entity_and_source_for_table(
+        &self,
+        table: &str,
+    ) -> Option<(&str, &str, &EntityDef)> {
+        self.entities.iter().find_map(|(name, entity)| {
+            entity.sources.iter().find_map(|(source_id, source)| {
+                (source.source_type == SOURCE_POSTGRES && source.table.as_deref() == Some(table))
+                    .then_some((name.as_str(), source_id.as_str(), entity))
+            })
         })
     }
 
@@ -135,8 +193,51 @@ impl SyncSchema {
         entity
             .sources
             .values()
-            .find(|s| s.source_type == "postgres")
+            .find(|s| s.source_type == SOURCE_POSTGRES)
             .and_then(|s| s.table.as_deref())
+    }
+
+    /// Distinct physical tables referenced by postgres sources.
+    pub fn postgres_tables(&self) -> Vec<String> {
+        let mut tables: Vec<String> = self
+            .entities
+            .values()
+            .flat_map(|entity| entity.sources.values())
+            .filter(|source| source.source_type == SOURCE_POSTGRES)
+            .filter_map(|source| source.table.clone())
+            .collect();
+        tables.sort();
+        tables.dedup();
+        tables
+    }
+
+    pub fn kafka_bindings(&self) -> Vec<KafkaBinding> {
+        let mut bindings = Vec::new();
+        for (entity_type, entity) in &self.entities {
+            for (source_id, source) in &entity.sources {
+                if source.source_type != SOURCE_KAFKA {
+                    continue;
+                }
+                let Some(topic) = source.topic.clone() else {
+                    continue;
+                };
+                let Some(entity_key) = source.entity_key.clone() else {
+                    continue;
+                };
+                bindings.push(KafkaBinding {
+                    source_id: source_id.clone(),
+                    entity_type: entity_type.clone(),
+                    topic,
+                    entity_key,
+                });
+            }
+        }
+        bindings.sort_by(|a, b| {
+            a.entity_type
+                .cmp(&b.entity_type)
+                .then(a.source_id.cmp(&b.source_id))
+        });
+        bindings
     }
 
     /// Field names owned by `source_id` on this entity.
@@ -168,7 +269,7 @@ impl SyncSchema {
         entity
             .sources
             .iter()
-            .find(|(_, s)| s.source_type == "postgres")
+            .find(|(_, s)| s.source_type == SOURCE_POSTGRES)
             .map(|(id, _)| id.as_str())
     }
 }
@@ -186,6 +287,10 @@ entities:
       postgres:
         type: postgres
         table: drivers
+      gps:
+        type: kafka
+        topic: driver-locations
+        entity_key: driver_id
       http:
         type: http
     fields:
@@ -199,7 +304,7 @@ entities:
         source: postgres
         mode: transactional
       location:
-        source: http
+        source: gps
         mode: latest_value
         ordering: sequence
 "#;
@@ -213,10 +318,20 @@ entities:
             schema.entity_for_table("drivers").map(|(n, _)| n),
             Some("driver")
         );
-        assert_eq!(schema.field_authority("driver", "location"), Some("http"));
+        assert_eq!(schema.field_authority("driver", "location"), Some("gps"));
         assert_eq!(
             schema.fields_owned_by("driver", "postgres"),
             vec!["id", "name", "status"]
+        );
+        assert!(schema.has_source_type("kafka"));
+        assert_eq!(
+            schema.kafka_bindings(),
+            vec![KafkaBinding {
+                source_id: "gps".into(),
+                entity_type: "driver".into(),
+                topic: "driver-locations".into(),
+                entity_key: "driver_id".into(),
+            }]
         );
     }
 
@@ -232,5 +347,45 @@ entities:
       id: { source: missing }
 "#;
         assert!(SyncSchema::from_yaml_str(bad).is_err());
+    }
+
+    #[test]
+    fn rejects_kafka_without_topic_or_entity_key() {
+        let no_topic = r#"
+entities:
+  driver:
+    identity: { field: id }
+    sources:
+      gps: { type: kafka, entity_key: driver_id }
+    fields:
+      id: { source: gps }
+"#;
+        assert!(SyncSchema::from_yaml_str(no_topic).is_err());
+
+        let no_key = r#"
+entities:
+  driver:
+    identity: { field: id }
+    sources:
+      gps: { type: kafka, topic: driver-locations }
+    fields:
+      id: { source: gps }
+"#;
+        assert!(SyncSchema::from_yaml_str(no_key).is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_source_type() {
+        let bad = r#"
+entities:
+  driver:
+    identity: { field: id }
+    sources:
+      mongo: { type: mongodb }
+    fields:
+      id: { source: mongo }
+"#;
+        let err = SyncSchema::from_yaml_str(bad).unwrap_err().to_string();
+        assert!(err.contains("unsupported type"), "{err}");
     }
 }
