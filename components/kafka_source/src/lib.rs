@@ -2,6 +2,8 @@
 //!
 //! Brokers come from process env. Topic and entity key come from the sync schema.
 
+pub mod discover;
+
 use anyhow::{Context, Result};
 use cds::SourceUpdate;
 use futures_util::StreamExt;
@@ -16,6 +18,11 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
+
+pub use discover::{
+    discover_topics, infer_fields_from_samples, is_internal_topic, InferredField, TopicSample,
+    DEFAULT_SAMPLE_SIZE,
+};
 
 pub const CONSUMER_GROUP: &str = "substate";
 
@@ -77,6 +84,10 @@ async fn consume_binding(
 
     info!(topic = %binding.topic, entity = %binding.entity_type, "consuming kafka topic");
 
+    let ordering = sync_schema
+        .ordering_for_source(&binding.entity_type, &binding.source_id)
+        .map(str::to_string);
+
     while let Some(item) = stream.next().await {
         let (record, _high_watermark) = match item {
             Ok(pair) => pair,
@@ -104,6 +115,7 @@ async fn consume_binding(
             &owned,
             &payload,
             offset,
+            ordering.as_deref(),
         ) else {
             warn!(topic = %binding.topic, "kafka message missing entity key");
             continue;
@@ -117,7 +129,8 @@ async fn consume_binding(
 
 /// Map a JSON payload onto a [`SourceUpdate`].
 ///
-/// Version is `payload.sequence` when present, otherwise the Kafka offset.
+/// Version comes from `ordering_field` when present on the payload, otherwise
+/// from `sequence`, otherwise the Kafka offset.
 pub fn project_kafka_json(
     source_id: &str,
     entity_type: &str,
@@ -125,12 +138,14 @@ pub fn project_kafka_json(
     owned_fields: &[&str],
     payload: &Value,
     offset: i64,
+    ordering_field: Option<&str>,
 ) -> Option<SourceUpdate> {
     let object = payload.as_object()?;
     let id = json_id(object.get(entity_key)?)?;
-    let version = object
-        .get("sequence")
+    let version = ordering_field
+        .and_then(|name| object.get(name))
         .and_then(json_u64)
+        .or_else(|| object.get("sequence").and_then(json_u64))
         .unwrap_or(offset as u64);
 
     let owned: std::collections::HashSet<&str> = owned_fields.iter().copied().collect();
@@ -193,6 +208,7 @@ mod tests {
                 "noise": true
             }),
             99,
+            Some("sequence"),
         )
         .unwrap();
         assert_eq!(update.id, "1");
@@ -212,10 +228,32 @@ mod tests {
             &owned,
             &json!({"driver_id": "728", "location": {"lat": 1.0}}),
             17,
+            None,
         )
         .unwrap();
         assert_eq!(update.id, "728");
         assert_eq!(update.versions.get("location"), Some(&17));
+    }
+
+    #[test]
+    fn uses_custom_ordering_field() {
+        let owned = ["location"];
+        let update = project_kafka_json(
+            "gps",
+            "driver",
+            "driver_id",
+            &owned,
+            &json!({
+                "driver_id": 1,
+                "location": {"lat": 1.0},
+                "seq": 7,
+                "sequence": 99
+            }),
+            1,
+            Some("seq"),
+        )
+        .unwrap();
+        assert_eq!(update.versions.get("location"), Some(&7));
     }
 
     #[test]
@@ -228,6 +266,7 @@ mod tests {
             &owned,
             &json!({"location": {"lat": 1.0}}),
             1,
+            None,
         )
         .is_none());
     }

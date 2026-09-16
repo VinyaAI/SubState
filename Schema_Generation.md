@@ -436,7 +436,23 @@ That keeps merge behavior explicit and deterministic.
 
 8. Prototype Scope
 
-For the first dispatcher prototype, the schema should be handwritten.
+The engine prototype originally used a handwritten schema so sync semantics
+could be validated first.
+
+That path still works (`schema.template.yaml`). The prototype now also ships
+interactive generation:
+
+```bash
+cargo run -p substate-cli -- init
+cargo run -p substate-cli -- init --defaults --out ./schema.yaml
+```
+
+`substate init` discovers Postgres catalogs and samples Kafka JSON topics,
+proposes entity mappings, asks for authority / attach choices, and writes a
+sorted YAML file that `SyncSchema` can load. The CDS still never guesses merge
+behavior at runtime — generation is a setup tool.
+
+Example shape (unchanged contract):
 
 entities:
   driver:
@@ -467,7 +483,8 @@ entities:
         ordering: sequence
         flush_ms: 100
 
-The goal of the first prototype is to validate that these semantics are useful. Automatic schema discovery should come after the engine works.
+Not yet: merge-into-existing schemas, field remapping (`lat: latitude`), or
+Schema Registry / Avro discovery.
 
 9. Why This Matters
 

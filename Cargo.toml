@@ -10,6 +10,7 @@ members = [
     "components/engine",
     "components/delta",
     "components/schema",
+    "components/schema_gen",
     "components/cli",
 ]
 
@@ -41,3 +42,4 @@ kafka_source = { path = "components/kafka_source" }
 engine = { path = "components/engine" }
 delta = { path = "components/delta" }
 schema = { path = "components/schema" }
+schema_gen = { path = "components/schema_gen" }

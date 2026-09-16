@@ -1,0 +1,15 @@
+[package]
+name = "schema_gen"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+kafka_source = { workspace = true }
+postgres_source = { workspace = true }
+schema = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

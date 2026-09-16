@@ -1,5 +1,8 @@
 # Blank sync schema — not runnable. Replace every <placeholder> before use.
 #
+# Prefer generating a starting file:
+#   cargo run -p substate-cli -- init
+#
 # Bare keys (entities, identity, type, mode, ...) are required vocabulary.
 # type and mode values are enums, not names.
 # <angle brackets> are names you choose. The same token must match everywhere

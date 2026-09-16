@@ -13,12 +13,14 @@ axum = { workspace = true }
 cds = { workspace = true }
 clap = { workspace = true }
 delta = { workspace = true }
+dialoguer = "0.11"
 dotenvy = { workspace = true }
 engine = { workspace = true }
 futures-util = { workspace = true }
 kafka_source = { workspace = true }
 postgres_source = { workspace = true }
 schema = { workspace = true }
+schema_gen = { workspace = true }
 source = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

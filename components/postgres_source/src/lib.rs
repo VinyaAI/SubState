@@ -3,11 +3,15 @@
 //! Only fields owned by the postgres source (per sync schema) are loaded.
 //! Logical entity types come from the schema, not raw table names.
 
+pub mod catalog;
 pub mod cdc;
 pub mod config;
 pub mod pgoutput;
 pub mod poll;
 
+pub use catalog::{
+    load_catalog, ColumnInfo, ForeignKeyInfo, PostgresCatalog, TableInfo,
+};
 pub use config::Config;
 pub use sqlx::PgPool;
 
@@ -35,14 +39,16 @@ pub async fn snapshot(
     config: &Config,
     sync_schema: &SyncSchema,
 ) -> Result<Cds> {
-    let tables = discover_tables(pool, &config.schema).await?;
-    let columns = discover_columns(pool, &config.schema).await?;
-    let primary_keys = discover_primary_keys(pool, &config.schema).await?;
-    let present: HashSet<&str> = tables.iter().map(String::as_str).collect();
+    let pg_catalog = catalog::load_catalog(pool, &config.schema).await?;
+    let present: HashSet<&str> = pg_catalog
+        .tables
+        .iter()
+        .map(|t| t.name.as_str())
+        .collect();
 
     info!(
         schema = %config.schema,
-        tables = tables.len(),
+        tables = pg_catalog.tables.len(),
         entities = sync_schema.entities.len(),
         "discovered base tables"
     );
@@ -84,7 +90,10 @@ pub async fn snapshot(
             continue;
         }
 
-        let pk = primary_keys.get(table).cloned().unwrap_or_default();
+        let pk = pg_catalog
+            .table(table)
+            .map(|t| t.primary_key.clone())
+            .unwrap_or_default();
         if pk.is_empty() {
             warn!(table, "skipping table without primary key");
             cds.skip(logical_name.clone(), "no primary key");
@@ -107,7 +116,10 @@ pub async fn snapshot(
             let _ = cds.apply_source_update(update, owned.as_slice());
         }
 
-        let table_columns = columns.get(table).cloned().unwrap_or_default();
+        let table_columns: Vec<String> = pg_catalog
+            .table(table)
+            .map(|t| t.columns.iter().map(|c| c.name.clone()).collect())
+            .unwrap_or_default();
         let mut catalog_columns: Vec<String> = entity.fields.keys().cloned().collect();
         catalog_columns.sort();
         let row_count = cds.ids_for_type(logical_name).len();
@@ -246,80 +258,6 @@ fn json_id(value: &Value) -> String {
         Value::Null => "null".to_string(),
         other => other.to_string(),
     }
-}
-
-async fn discover_tables(pool: &PgPool, schema: &str) -> Result<Vec<String>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT table_name
-        FROM information_schema.tables
-        WHERE table_schema = $1
-          AND table_type = 'BASE TABLE'
-        ORDER BY table_name
-        "#,
-    )
-    .bind(schema)
-    .fetch_all(pool)
-    .await
-    .context("failed to discover tables")?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| row.get::<String, _>("table_name"))
-        .collect())
-}
-
-async fn discover_columns(pool: &PgPool, schema: &str) -> Result<HashMap<String, Vec<String>>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT table_name, column_name
-        FROM information_schema.columns
-        WHERE table_schema = $1
-        ORDER BY table_name, ordinal_position
-        "#,
-    )
-    .bind(schema)
-    .fetch_all(pool)
-    .await
-    .context("failed to discover columns")?;
-
-    let mut columns: HashMap<String, Vec<String>> = HashMap::new();
-    for row in rows {
-        let table_name: String = row.get("table_name");
-        let column_name: String = row.get("column_name");
-        columns.entry(table_name).or_default().push(column_name);
-    }
-    Ok(columns)
-}
-
-async fn discover_primary_keys(
-    pool: &PgPool,
-    schema: &str,
-) -> Result<HashMap<String, Vec<String>>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT kcu.table_name, kcu.column_name
-        FROM information_schema.table_constraints tc
-        JOIN information_schema.key_column_usage kcu
-          ON tc.constraint_name = kcu.constraint_name
-         AND tc.table_schema = kcu.table_schema
-        WHERE tc.table_schema = $1
-          AND tc.constraint_type = 'PRIMARY KEY'
-        ORDER BY kcu.table_name, kcu.ordinal_position
-        "#,
-    )
-    .bind(schema)
-    .fetch_all(pool)
-    .await
-    .context("failed to discover primary keys")?;
-
-    let mut keys: HashMap<String, Vec<String>> = HashMap::new();
-    for row in rows {
-        let table_name: String = row.get("table_name");
-        let column_name: String = row.get("column_name");
-        keys.entry(table_name).or_default().push(column_name);
-    }
-    Ok(keys)
 }
 
 /// Load every row of one table as a JSON object via `to_jsonb`.

@@ -59,11 +59,15 @@ that matches your columns.
 
 ```bash
 cp components/cli/.env.example .env
-cp schema.template.yaml schema.yaml
-# Edit schema.yaml: replace every <placeholder>
 # Edit .env:
 #   DATABASE_URL=postgresql://user:password@localhost:5432/mydb
 #   SCHEMA_PATH=./schema.yaml
+#   KAFKA_BROKERS=localhost:9092   # optional
+
+# Interactive: scan Postgres/Kafka and write schema.yaml
+cargo run -p substate-cli -- init
+# Or accept all proposals:
+# cargo run -p substate-cli -- init --defaults
 
 cargo run -p substate-cli -- serve
 curl http://127.0.0.1:8080/health
@@ -71,12 +75,12 @@ curl http://127.0.0.1:8080/health
 
 | Env | Meaning |
 | --- | --- |
-| `DATABASE_URL` | **Required.** Your Postgres connection string |
-| `SCHEMA_PATH` | **Required.** Path to your sync schema YAML |
+| `DATABASE_URL` | Required for Postgres sources / `init` scan |
+| `SCHEMA_PATH` | **Required for serve/shell.** Path to sync schema YAML |
 | `CDS_SCHEMA` | Postgres schema to read (default: `public`) |
 | `CDS_POLL_MS` | Poll interval if CDC is unavailable (default: `2000`) |
 | `POSTGRES_FOLLOW` | `auto` (default), `cdc`, or `poll` |
-| `KAFKA_BROKERS` | Required when the schema has a `kafka` source |
+| `KAFKA_BROKERS` | Required when the schema has a `kafka` source (also used by `init`) |
 | `BIND_ADDR` | Listen address (default: `127.0.0.1:8080`) |
 
 `POSTGRES_FOLLOW=auto` tries logical decoding (`pgoutput` slot `substate`) and
@@ -89,10 +93,21 @@ More options: [components/cli/.env.example](components/cli/.env.example).
 Clients subscribe and ingest by **logical name** (the entity key you choose),
 never by the physical table name.
 
-Copy [schema.template.yaml](schema.template.yaml) to `schema.yaml` (gitignored).
-Bare keys (`entities`, `identity`, `type`, `mode`, …) are required vocabulary.
-`<angle brackets>` are names you choose — the same token must match everywhere
-it is referenced (`identity.field` ↔ `fields`, `fields.*.source` ↔ `sources`).
+**Preferred:** generate a starting schema from your sources:
+
+```bash
+cargo run -p substate-cli -- init
+# cargo run -p substate-cli -- init --defaults --out ./schema.yaml
+```
+
+`substate init` scans Postgres (`DATABASE_URL` / `CDS_SCHEMA`) and optionally
+Kafka (`KAFKA_BROKERS`), asks only for mapping/semantics, and writes a sorted
+YAML file the engine can load. Review the file before `serve`.
+
+You can still hand-write from [schema.template.yaml](schema.template.yaml)
+(blank skeleton with placeholders). Bare keys (`entities`, `identity`, `type`,
+`mode`, …) are required vocabulary. Names you choose must match everywhere they
+are referenced (`identity.field` ↔ `fields`, `fields.*.source` ↔ `sources`).
 
 ```yaml
 entities:
@@ -131,8 +146,7 @@ Rules in short:
 - Kafka/HTTP fields appear when a message or ingest arrives and are lost if
   SubState restarts
 - Supported source types: `postgres`, `kafka`, `http`
-- Automatic schema discovery is not built yet (see
-  [Schema_Generation.md](Schema_Generation.md))
+- Discovery details and future semantics: [Schema_Generation.md](Schema_Generation.md)
 
 ## HTTP / WebSocket
 
@@ -218,7 +232,7 @@ This is a prototype — good for learning and local experiments, not production.
 | --- | --- |
 | Postgres snapshot + CDC (`pgoutput`) or poll fallback | MySQL / Mongo / Oracle adapters |
 | Kafka JSON consumer + HTTP ingest | Schema Registry / Avro / Debezium envelope |
-| Handwritten schema YAML | Schema discovery / generation |
+| `substate init` schema discovery | Merge-into-existing schema; field remapping |
 | In-memory CDS, subscriptions, history | Persistence across restart |
 | Equality `where` (AND only) | Ranges, spatial filters, OR, joins |
 | Last 500 deltas per subscription; then reset | Durable / unlimited resume history |

@@ -1,43 +1,43 @@
-//! Handwritten sync schema: logical entities, sources, and field authority.
+//! Sync schema: logical entities, sources, and field authority.
 //!
 //! The CDS merge path consults this contract so multiple backends can contribute
-//! fields to one entity without wiping each other. Automatic discovery is out of
-//! scope; this crate only loads and validates a YAML file.
+//! fields to one entity without wiping each other. Automatic discovery lives in
+//! `schema_gen` / `substate init`; this crate loads, validates, and serializes YAML.
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SyncSchema {
     pub entities: HashMap<String, EntityDef>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EntityDef {
     pub identity: IdentityDef,
     pub sources: HashMap<String, SourceDef>,
     pub fields: HashMap<String, FieldDef>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct IdentityDef {
     pub field: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SourceDef {
     #[serde(rename = "type")]
     pub source_type: String,
     /// Physical table name when `source_type` is `postgres`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub table: Option<String>,
     /// Topic name when `source_type` is `kafka`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub topic: Option<String>,
     /// Payload field that holds the logical entity id when `source_type` is `kafka`.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entity_key: Option<String>,
 }
 
@@ -50,15 +50,15 @@ pub struct KafkaBinding {
     pub entity_key: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FieldDef {
     /// Authoritative source id (key under `sources`).
     pub source: String,
     #[serde(default = "default_mode")]
     pub mode: FieldMode,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ordering: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flush_ms: Option<u64>,
 }
 
@@ -66,7 +66,7 @@ fn default_mode() -> FieldMode {
     FieldMode::Transactional
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FieldMode {
     Transactional,
@@ -271,6 +271,19 @@ impl SyncSchema {
             .iter()
             .find(|(_, s)| s.source_type == SOURCE_POSTGRES)
             .map(|(id, _)| id.as_str())
+    }
+
+    /// First `ordering` field declared on fields owned by `source_id`, if any.
+    pub fn ordering_for_source(&self, entity_name: &str, source_id: &str) -> Option<&str> {
+        let entity = self.entities.get(entity_name)?;
+        let mut names: Vec<_> = entity
+            .fields
+            .iter()
+            .filter(|(_, f)| f.source == source_id)
+            .filter_map(|(name, f)| f.ordering.as_deref().map(|o| (name.as_str(), o)))
+            .collect();
+        names.sort_by(|a, b| a.0.cmp(b.0));
+        names.first().map(|(_, o)| *o)
     }
 }
 
