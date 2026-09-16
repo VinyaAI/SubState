@@ -459,18 +459,16 @@ fn format_help() -> String {
         "",
         "CDS inspect: GET http://BIND_ADDR/v1/cds",
         "  curl -s http://127.0.0.1:8080/v1/cds",
-        "  curl -s http://127.0.0.1:8080/v1/cds/driver/1",
+        "  curl -s http://127.0.0.1:8080/v1/cds/<entity>/1",
         "",
         "WebSocket: ws://BIND_ADDR/v1/sync  (default BIND_ADDR=127.0.0.1:8080)",
         "  websocat ws://127.0.0.1:8080/v1/sync",
-        "  {\"type\":\"subscribe\",\"entity_type\":\"driver\",\"where\":{\"name\":\"John Doe\"}}",
+        "  {\"type\":\"subscribe\",\"entity_type\":\"<entity>\",\"where\":{\"<field>\":\"value\"}}",
         "",
         "Sources: Postgres CDC/poll, Kafka (KAFKA_BROKERS), HTTP ingest",
         "HTTP ingest: POST http://BIND_ADDR/v1/ingest",
         "  curl -s http://127.0.0.1:8080/v1/ingest -H 'content-type: application/json' \\",
-        "    -d '{\"source\":\"http\",\"entity_type\":\"driver\",\"id\":\"1\",\"fields\":{\"location\":{\"lat\":36.16,\"lng\":-86.78}},\"versions\":{\"location\":1}}'",
-        "",
-        "Full stack smoke: docker compose up --build && ./scripts/smoke.sh",
+        "    -d '{\"source\":\"<http_source>\",\"entity_type\":\"<entity>\",\"id\":\"1\",\"fields\":{\"<live_field>\":{\"lat\":36.16,\"lng\":-86.78}},\"versions\":{\"<live_field>\":1}}'",
     ]
     .join("\n")
 }

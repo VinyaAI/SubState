@@ -1,0 +1,34 @@
+# Blank sync schema — not runnable. Replace every <placeholder> before use.
+#
+# Bare keys (entities, identity, type, mode, ...) are required vocabulary.
+# type and mode values are enums, not names.
+# <angle brackets> are names you choose. The same token must match everywhere
+# it appears (identity.field ↔ fields, fields.source ↔ sources).
+#
+# Copy to schema.yaml, replace placeholders, then point SCHEMA_PATH at that file.
+
+entities:
+  <entity>:                          # clients subscribe / ingest this name
+    identity:
+      field: <id_field>              # must also be a key under fields
+    sources:
+      <pg_source>:                   # nickname; does not have to be "postgres"
+        type: postgres               # enum: postgres | kafka | http
+        table: <postgres_table>      # physical table
+      <stream_source>:
+        type: kafka
+        topic: <kafka_topic>
+        entity_key: <payload_id>     # field on the Kafka message
+      <http_source>:
+        type: http
+    fields:
+      <id_field>:
+        source: <pg_source>          # must match a key under sources
+        mode: transactional          # enum: transactional | latest_value
+      <field>:
+        source: <pg_source>
+        mode: transactional
+      <live_field>:
+        source: <stream_source>
+        mode: latest_value
+        ordering: <ordering_field>   # field on the Kafka/HTTP payload

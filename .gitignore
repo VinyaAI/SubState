@@ -2,3 +2,4 @@
 **/.env
 node_modules/
 clients/typescript/dist/
+schema.yaml

@@ -10,23 +10,24 @@ Minimal TypeScript client for SubState:
 cd clients/typescript && npm install && npm run build
 ```
 
+Replace `<entity>`, `<http_source>`, and field names with the values from your
+`schema.yaml`.
+
 ```ts
 import { cds, connect, ingest } from "@substate/client";
 
 const snapshot = await cds("http://127.0.0.1:8080");
-const alice = await cds("http://127.0.0.1:8080", "driver/1");
+const row = await cds("http://127.0.0.1:8080", "<entity>/1");
 
 const client = await connect("ws://127.0.0.1:8080/v1/sync");
-client.subscribe("driver", { status: "available" });
+client.subscribe("<entity>", { "<field>": "value" });
 const subscribed = await client.waitFor((m) => m.type === "subscribed");
 
 await ingest("http://127.0.0.1:8080", {
-  source: "http",
-  entity_type: "driver",
+  source: "<http_source>",
+  entity_type: "<entity>",
   id: "1",
-  fields: { location: { lat: 36.16, lng: -86.78 } },
-  versions: { location: 1 },
+  fields: { "<live_field>": { lat: 36.16, lng: -86.78 } },
+  versions: { "<live_field>": 1 },
 });
 ```
-
-See `../../scripts/smoke.mjs` for an end-to-end example against Docker Compose.
