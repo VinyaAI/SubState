@@ -65,7 +65,7 @@ pub async fn snapshot(
             let field_names: Vec<String> = entity.fields.keys().cloned().collect();
             cds.add_table(TableCatalog {
                 name: logical_name.clone(),
-                primary_key: vec![entity.identity.field.clone()],
+                primary_key: entity.identity.field_names().to_vec(),
                 columns: field_names,
                 row_count: 0,
             });
@@ -106,7 +106,7 @@ pub async fn snapshot(
         let (updates, _) = project_postgres_rows(
             logical_name,
             source_id,
-            &entity.identity.field,
+            entity.identity.field(),
             &owned,
             &pk,
             rows,
@@ -127,7 +127,7 @@ pub async fn snapshot(
         let row_count = cds.ids_for_type(logical_name).len();
         cds.add_table(TableCatalog {
             name: logical_name.clone(),
-            primary_key: vec![entity.identity.field.clone()],
+            primary_key: entity.identity.field_names().to_vec(),
             columns: if catalog_columns.is_empty() {
                 table_columns
             } else {
@@ -178,7 +178,7 @@ pub fn catalog_only(schema_name: impl Into<String>, sync_schema: &SyncSchema) ->
         let field_names: Vec<String> = entity.fields.keys().cloned().collect();
         cds.add_table(TableCatalog {
             name: logical_name.clone(),
-            primary_key: vec![entity.identity.field.clone()],
+            primary_key: entity.identity.field_names().to_vec(),
             columns: field_names,
             row_count: 0,
         });

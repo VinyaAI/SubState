@@ -46,3 +46,9 @@ entities:
         path: <json_key>             # optional; defaults to field name
         ordering: <ordering_field>
         flush_ms: 100
+        ttl_ms: 5000                 # optional; drop stale latest-value fields
+    relations:                       # optional one-hop FKs
+      assigned_job:
+        entity: job                  # target logical entity
+        local: assigned_job          # local field holding remote id
+        # remote: id                 # optional; defaults to target identity

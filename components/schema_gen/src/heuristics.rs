@@ -150,7 +150,7 @@ fn normalize_token(value: &str) -> String {
 
 /// Whether a postgres table is eligible for auto entity generation.
 pub fn table_is_eligible(table: &TableInfo) -> bool {
-    table.has_single_pk()
+    !table.primary_key.is_empty()
 }
 
 #[cfg(test)]

@@ -22,6 +22,9 @@ pub struct EntityId {
 pub struct FieldMeta {
     pub source: String,
     pub version: u64,
+    /// Unix millis when this field was last accepted (for TTL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at_ms: Option<u64>,
 }
 
 /// Current field values for one entity.
@@ -215,6 +218,7 @@ impl Cds {
                 FieldMeta {
                     source: update.source.clone(),
                     version: new_version,
+                    updated_at_ms: Some(now_unix_ms()),
                 },
             );
         }
@@ -394,6 +398,45 @@ impl Cds {
             }
         }
     }
+    /// Remove specific fields from an entity (TTL expiry). Returns Change::Update.
+    pub fn clear_fields(
+        &mut self,
+        entity_type: &str,
+        id: &str,
+        fields: &[String],
+    ) -> Option<Change> {
+        let entity_id = EntityId {
+            entity_type: entity_type.to_string(),
+            id: id.to_string(),
+        };
+        let state = self.entities.get_mut(&entity_id)?;
+        let mut removed = Vec::new();
+        for field in fields {
+            if state.fields.remove(field).is_some() {
+                state.field_meta.remove(field);
+                removed.push(field.clone());
+            }
+        }
+        if removed.is_empty() {
+            return None;
+        }
+        removed.sort();
+        let state = state.clone();
+        Some(Change {
+            entity_type: entity_type.to_string(),
+            id: id.to_string(),
+            kind: ChangeKind::Update { fields: removed },
+            state: Some(state),
+        })
+    }
+}
+
+fn now_unix_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn field_diff(before: &Map<String, Value>, after: &Map<String, Value>) -> Vec<String> {

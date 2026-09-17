@@ -19,11 +19,89 @@ pub struct EntityDef {
     pub identity: IdentityDef,
     pub sources: HashMap<String, SourceDef>,
     pub fields: HashMap<String, FieldDef>,
+    /// One-hop relations (local FK → remote entity).
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub relations: HashMap<String, RelationDef>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Accepts either `field: id` or `fields: [a, b]` in YAML.
+#[derive(Debug, Clone)]
 pub struct IdentityDef {
-    pub field: String,
+    fields: Vec<String>,
+}
+
+impl Serialize for IdentityDef {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeMap;
+        let mut map = serializer.serialize_map(Some(1))?;
+        if self.fields.len() == 1 {
+            map.serialize_entry("field", &self.fields[0])?;
+        } else {
+            map.serialize_entry("fields", &self.fields)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for IdentityDef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Raw {
+            field: Option<String>,
+            fields: Option<Vec<String>>,
+        }
+        let raw = Raw::deserialize(deserializer)?;
+        if let Some(fields) = raw.fields {
+            if fields.is_empty() {
+                return Err(serde::de::Error::custom("identity.fields must not be empty"));
+            }
+            return Ok(IdentityDef { fields });
+        }
+        if let Some(field) = raw.field {
+            return Ok(IdentityDef {
+                fields: vec![field],
+            });
+        }
+        Err(serde::de::Error::custom(
+            "identity requires `field` or `fields`",
+        ))
+    }
+}
+
+impl IdentityDef {
+    pub fn single(field: impl Into<String>) -> Self {
+        Self {
+            fields: vec![field.into()],
+        }
+    }
+
+    pub fn composite(fields: Vec<String>) -> Self {
+        Self { fields }
+    }
+
+    pub fn field_names(&self) -> &[String] {
+        &self.fields
+    }
+
+    /// First identity field name (single-PK convenience).
+    pub fn field(&self) -> &str {
+        self.fields.first().map(String::as_str).unwrap_or("")
+    }
+}
+
+/// One-hop FK relation from this entity to another.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct RelationDef {
+    pub entity: String,
+    pub local: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -60,6 +138,9 @@ pub struct FieldDef {
     pub ordering: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flush_ms: Option<u64>,
+    /// Drop latest-value field when older than this many ms (engine TTL sweep).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
     /// Physical Postgres column when it differs from the logical field name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column: Option<String>,
@@ -109,11 +190,30 @@ impl SyncSchema {
             if entity.fields.is_empty() {
                 bail!("entity '{name}' has no fields");
             }
-            if !entity.fields.contains_key(&entity.identity.field) {
-                bail!(
-                    "entity '{name}' identity field '{}' is not declared under fields",
-                    entity.identity.field
-                );
+            let identity_names = entity.identity.field_names();
+            if identity_names.is_empty() {
+                bail!("entity '{name}' identity has no fields");
+            }
+            for id_field in identity_names {
+                if !entity.fields.contains_key(id_field) {
+                    bail!(
+                        "entity '{name}' identity field '{id_field}' is not declared under fields"
+                    );
+                }
+            }
+            for (rel_name, rel) in &entity.relations {
+                if !entity.fields.contains_key(&rel.local) {
+                    bail!(
+                        "entity '{name}' relation '{rel_name}' local field '{}' missing",
+                        rel.local
+                    );
+                }
+                if !self.entities.contains_key(&rel.entity) {
+                    bail!(
+                        "entity '{name}' relation '{rel_name}' targets unknown entity '{}'",
+                        rel.entity
+                    );
+                }
             }
             for (field_name, field) in &entity.fields {
                 if !entity.sources.contains_key(&field.source) {

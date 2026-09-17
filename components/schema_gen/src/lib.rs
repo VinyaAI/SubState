@@ -13,8 +13,8 @@ pub use heuristics::{
 };
 pub use propose::{
     attach_http_source, attach_kafka_to_entity, build_schema, default_entity_name,
-    entity_from_postgres_table, kafka_only_entity, propose_kafka_attach, ConflictPolicy,
-    EntityDraft, FieldDraft, KafkaAttachDraft, SourceDraft,
+    entity_from_postgres_table, kafka_only_entity, merge_schemas, propose_kafka_attach,
+    ConflictPolicy, EntityDraft, FieldDraft, KafkaAttachDraft, SourceDraft,
 };
 
 use anyhow::Result;

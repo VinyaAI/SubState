@@ -175,16 +175,35 @@ async fn run_with_prompter(
     kafka_brokers: Option<&[String]>,
     pg_schema: &str,
 ) -> Result<()> {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum WriteMode {
+        Create,
+        Merge,
+        Overwrite,
+    }
+
+    let mut write_mode = WriteMode::Create;
     if options.out.exists() {
-        let overwrite = prompter.confirm(
-            &format!(
-                "Output file {} already exists. Overwrite?",
-                options.out.display()
-            ),
-            options.defaults,
-        )?;
-        if !overwrite {
-            bail!("aborted — existing schema left unchanged");
+        if options.defaults {
+            write_mode = WriteMode::Merge;
+        } else {
+            let items = vec![
+                "Merge into existing schema (keep hand-edits where possible)".to_string(),
+                "Overwrite entire file".to_string(),
+                "Abort".to_string(),
+            ];
+            match prompter.select(
+                &format!(
+                    "Output file {} already exists. What should we do?",
+                    options.out.display()
+                ),
+                &items,
+                0,
+            )? {
+                0 => write_mode = WriteMode::Merge,
+                1 => write_mode = WriteMode::Overwrite,
+                _ => bail!("aborted — existing schema left unchanged"),
+            }
         }
     }
 
@@ -226,7 +245,13 @@ async fn run_with_prompter(
         }
     }
 
-    let schema = build_schema(entities).context("generated schema failed validation")?;
+    let mut schema = build_schema(entities).context("generated schema failed validation")?;
+    if write_mode == WriteMode::Merge {
+        if let Ok(existing) = schema::SyncSchema::load_path(&options.out) {
+            schema = schema_gen::merge_schemas(existing, schema);
+            schema.validate().context("merged schema failed validation")?;
+        }
+    }
     let yaml = schema_to_yaml(&schema)?;
 
     if let Some(parent) = options.out.parent() {
@@ -240,9 +265,12 @@ async fn run_with_prompter(
 
     println!();
     println!("Wrote {}", options.out.display());
+    if write_mode == WriteMode::Merge {
+        println!("(merged into existing schema)");
+    }
     if !skipped_tables.is_empty() {
         println!(
-            "Skipped tables (no single-column PK): {}",
+            "Skipped tables (no primary key): {}",
             skipped_tables.join(", ")
         );
     }
@@ -322,7 +350,12 @@ fn attach_kafka_topics(
     let entity_names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
     let entity_idents: Vec<(String, String)> = entities
         .iter()
-        .map(|e| (e.name.clone(), e.identity_field.clone()))
+        .map(|e| {
+            (
+                e.name.clone(),
+                e.identity_fields.first().cloned().unwrap_or_default(),
+            )
+        })
         .collect();
 
     for sample in samples {

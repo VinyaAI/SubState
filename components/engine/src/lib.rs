@@ -256,6 +256,89 @@ impl Engine {
         self.coalesce.values().map(|p| p.flush_at).min()
     }
 
+    /// Expire latest-value fields past their `ttl_ms`.
+    pub fn expire_ttl(&mut self) -> Vec<Transition> {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+
+        let mut to_clear: Vec<(String, String, Vec<String>)> = Vec::new();
+        for (id, state) in self.cds.export_entities() {
+            let Some(entity) = self.schema.entity(&id.entity_type) else {
+                continue;
+            };
+            let mut expired = Vec::new();
+            for (fname, fdef) in &entity.fields {
+                let Some(ttl) = fdef.ttl_ms else {
+                    continue;
+                };
+                if fdef.mode != FieldMode::LatestValue {
+                    continue;
+                }
+                let Some(meta) = state.field_meta.get(fname) else {
+                    continue;
+                };
+                let Some(updated) = meta.updated_at_ms else {
+                    continue;
+                };
+                if now_ms.saturating_sub(updated) >= ttl {
+                    expired.push(fname.clone());
+                }
+            }
+            if !expired.is_empty() {
+                to_clear.push((id.entity_type, id.id, expired));
+            }
+        }
+
+        let mut transitions = Vec::new();
+        for (entity_type, id, fields) in to_clear {
+            if let Some(change) = self.cds.clear_fields(&entity_type, &id, &fields) {
+                transitions.extend(self.fanout(&[change]));
+            }
+        }
+        transitions
+    }
+
+    /// After materializing primary matches, pull one-hop related entities in.
+    fn attach_relations(&self, primary_type: &str, user_state: &mut UserState) {
+        let Some(entity) = self.schema.entity(primary_type) else {
+            return;
+        };
+        if entity.relations.is_empty() {
+            return;
+        }
+        let primaries: Vec<(cds::EntityId, cds::EntityState)> = user_state
+            .entities
+            .iter()
+            .filter(|(id, _)| id.entity_type == primary_type)
+            .map(|(id, state)| (id.clone(), state.clone()))
+            .collect();
+
+        for (_, state) in primaries {
+            for rel in entity.relations.values() {
+                let Some(local_val) = state.fields.get(&rel.local) else {
+                    continue;
+                };
+                let remote_id = match local_val {
+                    Value::String(s) => s.clone(),
+                    Value::Number(n) => n.to_string(),
+                    other => other.to_string(),
+                };
+                if let Some(related) = self.cds.get(&rel.entity, &remote_id) {
+                    user_state.entities.insert(
+                        cds::EntityId {
+                            entity_type: rel.entity.clone(),
+                            id: remote_id,
+                        },
+                        related.clone(),
+                    );
+                }
+            }
+        }
+    }
+
     /// Apply many updates (one poll cycle / batch ingest).
     pub fn apply_source_updates(
         &mut self,
@@ -324,6 +407,7 @@ impl Engine {
                 user_state.entities.insert(id.clone(), state.clone());
             }
         }
+        self.attach_relations(&entity_type, &mut user_state);
         self.user_states.insert(sub.id.clone(), user_state.clone());
         Ok((sub, user_state))
     }

@@ -1,7 +1,7 @@
 //! Stable, sorted YAML emission for [`SyncSchema`].
 
 use anyhow::{Context, Result};
-use schema::{EntityDef, FieldDef, FieldMode, IdentityDef, SourceDef, SyncSchema};
+use schema::{EntityDef, FieldDef, FieldMode, IdentityDef, RelationDef, SourceDef, SyncSchema};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -15,6 +15,8 @@ struct YamlEntity {
     identity: IdentityDef,
     sources: BTreeMap<String, SourceDef>,
     fields: BTreeMap<String, YamlField>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    relations: BTreeMap<String, RelationDef>,
 }
 
 #[derive(Serialize)]
@@ -25,6 +27,8 @@ struct YamlField {
     ordering: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     flush_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ttl_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     column: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,6 +42,7 @@ impl From<&FieldDef> for YamlField {
             mode: field.mode,
             ordering: field.ordering.clone(),
             flush_ms: field.flush_ms,
+            ttl_ms: field.ttl_ms,
             column: field.column.clone(),
             path: field.path.clone(),
         }
@@ -56,10 +61,16 @@ impl From<&EntityDef> for YamlEntity {
             .iter()
             .map(|(k, v)| (k.clone(), YamlField::from(v)))
             .collect();
+        let relations: BTreeMap<_, _> = entity
+            .relations
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         Self {
             identity: entity.identity.clone(),
             sources,
             fields,
+            relations,
         }
     }
 }

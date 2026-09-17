@@ -43,7 +43,7 @@ pub struct SourceDraft {
 #[derive(Debug, Clone)]
 pub struct EntityDraft {
     pub name: String,
-    pub identity_field: String,
+    pub identity_fields: Vec<String>,
     pub sources: Vec<SourceDraft>,
     pub fields: Vec<FieldDraft>,
 }
@@ -57,16 +57,12 @@ pub struct KafkaAttachDraft {
     pub ordering: Option<String>,
 }
 
-/// Build an entity draft from one single-PK Postgres table.
+/// Build an entity draft from one Postgres table (single or composite PK).
 pub fn entity_from_postgres_table(table: &TableInfo, entity_name: &str) -> Result<EntityDraft> {
-    if !table.has_single_pk() {
-        bail!(
-            "table '{}' needs a single-column primary key (got {:?})",
-            table.name,
-            table.primary_key
-        );
+    if table.primary_key.is_empty() {
+        bail!("table '{}' has no primary key", table.name);
     }
-    let identity = table.primary_key[0].clone();
+    let identity_fields = table.primary_key.clone();
     let mut fields = Vec::new();
     for col in &table.columns {
         fields.push(FieldDraft {
@@ -76,16 +72,17 @@ pub fn entity_from_postgres_table(table: &TableInfo, entity_name: &str) -> Resul
             ordering: None,
         });
     }
-    if !fields.iter().any(|f| f.name == identity) {
-        bail!(
-            "primary key '{}' not present in columns for table '{}'",
-            identity,
-            table.name
-        );
+    for pk in &identity_fields {
+        if !fields.iter().any(|f| f.name == *pk) {
+            bail!(
+                "primary key '{pk}' not present in columns for table '{}'",
+                table.name
+            );
+        }
     }
     Ok(EntityDraft {
         name: entity_name.to_string(),
-        identity_field: identity,
+        identity_fields,
         sources: vec![SourceDraft {
             id: "postgres".into(),
             source_type: SOURCE_POSTGRES.into(),
@@ -214,7 +211,7 @@ pub fn kafka_only_entity(attach: &KafkaAttachDraft, entity_name: &str) -> Result
     }
     Ok(EntityDraft {
         name: entity_name.to_string(),
-        identity_field: attach.entity_key.clone(),
+        identity_fields: vec![attach.entity_key.clone()],
         sources: vec![SourceDraft {
             id: attach.source_id.clone(),
             source_type: SOURCE_KAFKA.into(),
@@ -273,6 +270,7 @@ pub fn build_schema(entities: Vec<EntityDraft>) -> Result<SyncSchema> {
                     mode: field.mode,
                     ordering: field.ordering,
                     flush_ms,
+                    ttl_ms: None,
                     column: None,
                     path: None,
                 },
@@ -281,17 +279,42 @@ pub fn build_schema(entities: Vec<EntityDraft>) -> Result<SyncSchema> {
         map.insert(
             entity.name.clone(),
             EntityDef {
-                identity: IdentityDef {
-                    field: entity.identity_field,
-                },
+                identity: IdentityDef::composite(entity.identity_fields),
                 sources,
                 fields,
+                relations: HashMap::new(),
             },
         );
     }
     let schema = SyncSchema { entities: map };
     schema.validate()?;
     Ok(schema)
+}
+
+/// Merge newly discovered schema into an existing hand-edited schema.
+///
+/// Existing entities keep their fields/modes/relations/remaps. New entities and
+/// new fields from `incoming` are added. Incoming never deletes existing keys.
+pub fn merge_schemas(mut existing: SyncSchema, incoming: SyncSchema) -> SyncSchema {
+    for (name, entity) in incoming.entities {
+        match existing.entities.get_mut(&name) {
+            None => {
+                existing.entities.insert(name, entity);
+            }
+            Some(dest) => {
+                for (sid, source) in entity.sources {
+                    dest.sources.entry(sid).or_insert(source);
+                }
+                for (fname, field) in entity.fields {
+                    dest.fields.entry(fname).or_insert(field);
+                }
+                for (rname, rel) in entity.relations {
+                    dest.relations.entry(rname).or_insert(rel);
+                }
+            }
+        }
+    }
+    existing
 }
 
 /// Default entity name for a physical table.

@@ -75,7 +75,9 @@ impl DeliveryHub {
     pub async fn flush_coalesced(&self) {
         let transitions = {
             let mut engine = self.engine.write().await;
-            engine.flush_coalesced(std::time::Instant::now())
+            let mut t = engine.flush_coalesced(std::time::Instant::now());
+            t.extend(engine.expire_ttl());
+            t
         };
         if !transitions.is_empty() {
             crate::metrics::coalesce_flush();

@@ -166,11 +166,11 @@ async fn apply_payload(
                 let row = tuple_to_object(&rel.columns, &tuple);
                 let owned = sync_schema.fields_owned_by(entity_type, source_id);
                 let column_map = sync_schema.column_map(entity_type, source_id);
-                let pk = vec![entity.identity.field.clone()];
+                let pk = entity.identity.field_names().to_vec();
                 let (updates, _) = project_postgres_rows(
                     entity_type,
                     source_id,
-                    &entity.identity.field,
+                    entity.identity.field(),
                     &owned,
                     &pk,
                     vec![row],
@@ -194,7 +194,7 @@ async fn apply_payload(
                 };
                 let row = tuple_to_object(&rel.columns, &key_tuple);
                 let id = row
-                    .get(&entity.identity.field)
+                    .get(entity.identity.field())
                     .or_else(|| rel.columns.first().and_then(|c| row.get(c)))
                     .map(json_id)
                     .unwrap_or_else(|| "unknown".into());
