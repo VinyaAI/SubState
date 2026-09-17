@@ -165,6 +165,7 @@ async fn apply_payload(
                 };
                 let row = tuple_to_object(&rel.columns, &tuple);
                 let owned = sync_schema.fields_owned_by(entity_type, source_id);
+                let column_map = sync_schema.column_map(entity_type, source_id);
                 let pk = vec![entity.identity.field.clone()];
                 let (updates, _) = project_postgres_rows(
                     entity_type,
@@ -174,6 +175,7 @@ async fn apply_payload(
                     &pk,
                     vec![row],
                     Some(version),
+                    &column_map,
                 );
                 for update in updates {
                     if tx.send(SourceEvent::Upsert(update)).await.is_err() {

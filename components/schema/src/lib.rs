@@ -60,6 +60,12 @@ pub struct FieldDef {
     pub ordering: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flush_ms: Option<u64>,
+    /// Physical Postgres column when it differs from the logical field name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<String>,
+    /// Physical Kafka/HTTP JSON path (top-level key) when it differs from the logical name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 fn default_mode() -> FieldMode {
@@ -115,6 +121,16 @@ impl SyncSchema {
                         "entity '{name}' field '{field_name}' references unknown source '{}'",
                         field.source
                     );
+                }
+                if let Some(column) = &field.column {
+                    if column.is_empty() {
+                        bail!("entity '{name}' field '{field_name}' has empty column");
+                    }
+                }
+                if let Some(path) = &field.path {
+                    if path.is_empty() {
+                        bail!("entity '{name}' field '{field_name}' has empty path");
+                    }
                 }
             }
             for (source_id, source) in &entity.sources {
@@ -284,6 +300,54 @@ impl SyncSchema {
             .collect();
         names.sort_by(|a, b| a.0.cmp(b.0));
         names.first().map(|(_, o)| *o)
+    }
+
+    /// Physical Postgres column for a logical field (defaults to the field name).
+    pub fn physical_column<'a>(&'a self, entity_name: &str, field: &'a str) -> Option<&'a str> {
+        let f = self.entities.get(entity_name)?.fields.get(field)?;
+        Some(f.column.as_deref().unwrap_or(field))
+    }
+
+    /// Physical JSON path for a logical field (defaults to the field name).
+    pub fn physical_path<'a>(&'a self, entity_name: &str, field: &'a str) -> Option<&'a str> {
+        let f = self.entities.get(entity_name)?.fields.get(field)?;
+        Some(f.path.as_deref().unwrap_or(field))
+    }
+
+    /// Map of logical field → physical column for fields owned by `source_id`.
+    pub fn column_map(&self, entity_name: &str, source_id: &str) -> HashMap<String, String> {
+        let Some(entity) = self.entities.get(entity_name) else {
+            return HashMap::new();
+        };
+        entity
+            .fields
+            .iter()
+            .filter(|(_, f)| f.source == source_id)
+            .map(|(name, f)| {
+                (
+                    name.clone(),
+                    f.column.clone().unwrap_or_else(|| name.clone()),
+                )
+            })
+            .collect()
+    }
+
+    /// Map of logical field → physical JSON path for fields owned by `source_id`.
+    pub fn path_map(&self, entity_name: &str, source_id: &str) -> HashMap<String, String> {
+        let Some(entity) = self.entities.get(entity_name) else {
+            return HashMap::new();
+        };
+        entity
+            .fields
+            .iter()
+            .filter(|(_, f)| f.source == source_id)
+            .map(|(name, f)| {
+                (
+                    name.clone(),
+                    f.path.clone().unwrap_or_else(|| name.clone()),
+                )
+            })
+            .collect()
     }
 }
 

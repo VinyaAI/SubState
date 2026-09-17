@@ -496,6 +496,8 @@ dependencies = [
  "schema",
  "serde_json",
  "subscription_index",
+ "tokio",
+ "tracing",
  "user_state",
 ]
 

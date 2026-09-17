@@ -101,6 +101,7 @@ pub async fn snapshot(
         }
 
         let owned = sync_schema.fields_owned_by(logical_name, source_id);
+        let column_map = sync_schema.column_map(logical_name, source_id);
         let rows = load_table(pool, &config.schema, table).await?;
         let (updates, _) = project_postgres_rows(
             logical_name,
@@ -110,6 +111,7 @@ pub async fn snapshot(
             &pk,
             rows,
             None,
+            &column_map,
         );
 
         for update in updates {
@@ -186,6 +188,9 @@ pub fn catalog_only(schema_name: impl Into<String>, sync_schema: &SyncSchema) ->
 
 /// Project physical rows into postgres-owned [`SourceUpdate`]s for one logical entity.
 ///
+/// `column_map` maps logical field name → physical column name. When empty or
+/// missing entries, the logical name is used as the column name.
+///
 /// `version` is applied to every field when set (CDC LSN). Otherwise versions stay empty
 /// and the CDS assigns `stored+1`.
 ///
@@ -198,15 +203,21 @@ pub fn project_postgres_rows(
     primary_key: &[String],
     rows: Vec<Map<String, Value>>,
     version: Option<u64>,
+    column_map: &HashMap<String, String>,
 ) -> (Vec<SourceUpdate>, HashSet<String>) {
     let owned: HashSet<&str> = owned_fields.iter().copied().collect();
     let mut updates = Vec::new();
     let mut present = HashSet::new();
 
     for row in rows {
+        let id_column = column_map
+            .get(identity_field)
+            .map(String::as_str)
+            .unwrap_or(identity_field);
         let id = if owned.contains(identity_field) {
-            // Prefer schema identity field when present on the row.
-            if row.contains_key(identity_field) {
+            if row.contains_key(id_column) {
+                json_id(row.get(id_column).unwrap())
+            } else if row.contains_key(identity_field) {
                 json_id(row.get(identity_field).unwrap())
             } else {
                 entity_id(primary_key, &row)
@@ -218,13 +229,14 @@ pub fn project_postgres_rows(
 
         let mut fields = Map::new();
         for key in &owned {
-            if let Some(value) = row.get(*key) {
+            let physical = column_map.get(*key).map(String::as_str).unwrap_or(*key);
+            if let Some(value) = row.get(physical).or_else(|| row.get(*key)) {
                 fields.insert((*key).to_string(), value.clone());
             }
         }
-        // Always include identity in fields when available on the row under PK name.
+        // Always include identity in fields when available on the row.
         if !fields.contains_key(identity_field) {
-            if let Some(value) = row.get(identity_field) {
+            if let Some(value) = row.get(id_column).or_else(|| row.get(identity_field)) {
                 fields.insert(identity_field.to_string(), value.clone());
             } else if primary_key.len() == 1 {
                 if let Some(value) = row.get(&primary_key[0]) {
@@ -297,6 +309,7 @@ pub fn quote_ident(name: &str) -> String {
 mod tests {
     use super::{project_postgres_rows, quote_ident};
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn quote_ident_escapes_quotes() {
@@ -320,6 +333,7 @@ mod tests {
                     .unwrap(),
             ],
             Some(99),
+            &HashMap::new(),
         );
         assert_eq!(present.len(), 1);
         assert_eq!(updates.len(), 1);
@@ -327,5 +341,25 @@ mod tests {
         assert_eq!(updates[0].fields["name"], json!("Alice"));
         assert_eq!(updates[0].entity_type, "driver");
         assert_eq!(updates[0].versions.get("name"), Some(&99));
+    }
+
+    #[test]
+    fn project_rows_remaps_physical_columns() {
+        use std::collections::HashMap;
+        let owned = ["id", "display_name"];
+        let mut column_map = HashMap::new();
+        column_map.insert("display_name".into(), "name".into());
+        let (updates, _) = project_postgres_rows(
+            "driver",
+            "postgres",
+            "id",
+            &owned,
+            &["id".to_string()],
+            vec![json!({"id": 1, "name": "Alice"}).as_object().cloned().unwrap()],
+            None,
+            &column_map,
+        );
+        assert_eq!(updates[0].fields["display_name"], json!("Alice"));
+        assert!(!updates[0].fields.contains_key("name"));
     }
 }

@@ -9,3 +9,5 @@ schema = { workspace = true }
 subscription_index = { workspace = true }
 user_state = { workspace = true }
 serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

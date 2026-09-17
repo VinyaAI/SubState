@@ -35,3 +35,14 @@ entities:
         source: <stream_source>
         mode: latest_value
         ordering: <ordering_field>   # field on the Kafka/HTTP payload
+        flush_ms: 100                # coalesce window; omitted → 100 for latest_value
+      <renamed_field>:
+        source: <pg_source>
+        mode: transactional
+        column: <physical_column>    # optional; defaults to field name
+      <renamed_stream_field>:
+        source: <stream_source>
+        mode: latest_value
+        path: <json_key>             # optional; defaults to field name
+        ordering: <ordering_field>
+        flush_ms: 100

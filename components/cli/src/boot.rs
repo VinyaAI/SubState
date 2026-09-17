@@ -107,10 +107,26 @@ pub async fn start() -> Result<Runtime> {
         tasks.push(Box::new(follow).spawn(tx));
     }
 
+    if config.api_key.is_none() {
+        tracing::warn!(
+            "SUBSTATE_API_KEY is unset; /v1/* is open (local-dev only). Set a shared secret before exposing beyond localhost."
+        );
+    }
+
+    let coalesce_hub = Arc::clone(&hub);
+    tasks.push(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_millis(25));
+        loop {
+            ticker.tick().await;
+            coalesce_hub.flush_coalesced().await;
+        }
+    }));
+
     let server_hub = Arc::clone(&hub);
     let bind_addr = config.bind_addr.clone();
+    let api_key = config.api_key.clone();
     tasks.push(tokio::spawn(async move {
-        if let Err(err) = ws::serve(&bind_addr, server_hub).await {
+        if let Err(err) = ws::serve(&bind_addr, server_hub, api_key).await {
             tracing::error!(error = %err, "sync API exited");
         }
     }));

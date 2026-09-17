@@ -16,18 +16,27 @@ Replace `<entity>`, `<http_source>`, and field names with the values from your
 ```ts
 import { cds, connect, ingest } from "@substate/client";
 
-const snapshot = await cds("http://127.0.0.1:8080");
-const row = await cds("http://127.0.0.1:8080", "<entity>/1");
+const opts = { apiKey: process.env.SUBSTATE_API_KEY }; // optional
 
-const client = await connect("ws://127.0.0.1:8080/v1/sync");
+const snapshot = await cds("http://127.0.0.1:8080", "", opts);
+const row = await cds("http://127.0.0.1:8080", "<entity>/1", opts);
+
+const client = await connect("ws://127.0.0.1:8080/v1/sync", opts);
 client.subscribe("<entity>", { "<field>": "value" });
 const subscribed = await client.waitFor((m) => m.type === "subscribed");
 
-await ingest("http://127.0.0.1:8080", {
-  source: "<http_source>",
-  entity_type: "<entity>",
-  id: "1",
-  fields: { "<live_field>": { lat: 36.16, lng: -86.78 } },
-  versions: { "<live_field>": 1 },
-});
+await ingest(
+  "http://127.0.0.1:8080",
+  {
+    source: "<http_source>",
+    entity_type: "<entity>",
+    id: "1",
+    fields: { "<live_field>": { lat: 36.16, lng: -86.78 } },
+    versions: { "<live_field>": 1 },
+  },
+  opts,
+);
 ```
+
+When the server sets `SUBSTATE_API_KEY`, pass the same value via `apiKey` (sent as
+`Authorization: Bearer` and `x-api-key`). `/health` stays open without a key.

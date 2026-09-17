@@ -261,13 +261,20 @@ pub fn build_schema(entities: Vec<EntityDraft>) -> Result<SyncSchema> {
         }
         let mut fields = HashMap::new();
         for field in entity.fields {
+            let flush_ms = if field.mode == FieldMode::LatestValue {
+                Some(100)
+            } else {
+                None
+            };
             fields.insert(
                 field.name,
                 FieldDef {
                     source: field.source,
                     mode: field.mode,
                     ordering: field.ordering,
-                    flush_ms: None,
+                    flush_ms,
+                    column: None,
+                    path: None,
                 },
             );
         }

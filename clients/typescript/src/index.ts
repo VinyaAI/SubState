@@ -39,14 +39,31 @@ export type IngestResult = {
   error?: string;
 };
 
+export type ClientOptions = {
+  /** Shared secret for `/v1/*` when the server has `SUBSTATE_API_KEY` set. */
+  apiKey?: string;
+};
+
+function authHeaders(apiKey?: string): Record<string, string> {
+  if (!apiKey) {
+    return {};
+  }
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "x-api-key": apiKey,
+  };
+}
+
 export class SubStateClient {
   readonly url: string;
+  readonly apiKey?: string;
   private ws: WebSocket | null = null;
   private handlers = new Set<MessageHandler>();
   private openPromise: Promise<void> | null = null;
 
-  constructor(url: string) {
+  constructor(url: string, options: ClientOptions = {}) {
     this.url = url;
+    this.apiKey = options.apiKey;
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -65,7 +82,10 @@ export class SubStateClient {
     }
 
     this.openPromise = new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.url);
+      const headers = authHeaders(this.apiKey);
+      const ws = new WebSocket(this.url, {
+        headers: Object.keys(headers).length ? headers : undefined,
+      });
       this.ws = ws;
 
       ws.once("open", () => resolve());
@@ -154,8 +174,11 @@ export class SubStateClient {
 }
 
 /** Convenience: connect to a sync WebSocket URL. */
-export async function connect(url: string): Promise<SubStateClient> {
-  const client = new SubStateClient(url);
+export async function connect(
+  url: string,
+  options: ClientOptions = {},
+): Promise<SubStateClient> {
+  const client = new SubStateClient(url, options);
   await client.connect();
   return client;
 }
@@ -164,10 +187,13 @@ export async function connect(url: string): Promise<SubStateClient> {
 export async function cds(
   baseUrl: string,
   path: string = "",
+  options: ClientOptions = {},
 ): Promise<unknown> {
   const suffix = path ? `/v1/cds/${path.replace(/^\//, "")}` : "/v1/cds";
   const url = `${baseUrl.replace(/\/$/, "")}${suffix}`;
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: authHeaders(options.apiKey),
+  });
   return response.json();
 }
 
@@ -175,11 +201,15 @@ export async function cds(
 export async function ingest(
   baseUrl: string,
   body: IngestBody,
+  options: ClientOptions = {},
 ): Promise<IngestResult> {
   const url = `${baseUrl.replace(/\/$/, "")}/v1/ingest`;
   const response = await fetch(url, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      ...authHeaders(options.apiKey),
+    },
     body: JSON.stringify(body),
   });
   const json = (await response.json()) as IngestResult;

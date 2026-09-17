@@ -67,6 +67,15 @@ impl DeliveryHub {
         Ok(changed_fields)
     }
 
+    /// Flush due coalesced latest-value fields and publish deltas.
+    pub async fn flush_coalesced(&self) {
+        let transitions = {
+            let mut engine = self.engine.write().await;
+            engine.flush_coalesced(std::time::Instant::now())
+        };
+        self.publish_transitions(transitions).await;
+    }
+
     /// Delete an entity (CDC delete or poll reconcile).
     pub async fn remove_and_publish(&self, entity_type: &str, id: &str) {
         let transitions = {

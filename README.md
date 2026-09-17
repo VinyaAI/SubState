@@ -82,6 +82,7 @@ curl http://127.0.0.1:8080/health
 | `POSTGRES_FOLLOW` | `auto` (default), `cdc`, or `poll` |
 | `KAFKA_BROKERS` | Required when the schema has a `kafka` source (also used by `init`) |
 | `BIND_ADDR` | Listen address (default: `127.0.0.1:8080`) |
+| `SUBSTATE_API_KEY` | Optional shared secret for `/v1/*` |
 
 `POSTGRES_FOLLOW=auto` tries logical decoding (`pgoutput` slot `substate`) and
 falls back to a full-table poll if `wal_level` is not `logical`.
@@ -146,11 +147,13 @@ Rules in short:
 - Kafka/HTTP fields appear when a message or ingest arrives and are lost if
   SubState restarts
 - Supported source types: `postgres`, `kafka`, `http`
-- Discovery details and future semantics: [Schema_Generation.md](Schema_Generation.md)
 
 ## HTTP / WebSocket
 
-Four endpoints. For local work, bind to localhost. `/v1/*` has **no auth**.
+Four endpoints. For local work, bind to localhost. When `SUBSTATE_API_KEY` is
+set, `/v1/*` requires `Authorization: Bearer <key>` or `x-api-key`. `/health`
+stays open. With no key set, `/v1/*` is open (local-dev only; a warning is
+logged).
 
 ### Health
 
@@ -237,7 +240,7 @@ This is a prototype — good for learning and local experiments, not production.
 | Equality `where` (AND only) | Ranges, spatial filters, OR, joins |
 | Last 500 deltas per subscription; then reset | Durable / unlimited resume history |
 | Ack does not pause delivery | Backpressure |
-| No auth on `/v1/*` | Auth, multi-tenant |
+| No auth unless `SUBSTATE_API_KEY` | SSO / multi-tenant |
 | Single process | Clustering / scale-out |
 
 HTTP-owned fields and resume history do not survive a restart. Postgres fields
@@ -246,5 +249,4 @@ are loaded again on boot.
 ## Learn more
 
 - [SubState.md](SubState.md) — architecture and long-term vision
-- [Schema_Generation.md](Schema_Generation.md) — future schema discovery
 - [clients/typescript/README.md](clients/typescript/README.md) — local TS client

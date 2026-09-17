@@ -108,6 +108,7 @@ async fn consume_binding(
             }
         };
         let owned = sync_schema.fields_owned_by(&binding.entity_type, &binding.source_id);
+        let path_map = sync_schema.path_map(&binding.entity_type, &binding.source_id);
         let Some(update) = project_kafka_json(
             &binding.source_id,
             &binding.entity_type,
@@ -116,6 +117,7 @@ async fn consume_binding(
             &payload,
             offset,
             ordering.as_deref(),
+            &path_map,
         ) else {
             warn!(topic = %binding.topic, "kafka message missing entity key");
             continue;
@@ -129,6 +131,9 @@ async fn consume_binding(
 
 /// Map a JSON payload onto a [`SourceUpdate`].
 ///
+/// `path_map` maps logical field → physical JSON key. Missing entries use the
+/// logical name.
+///
 /// Version comes from `ordering_field` when present on the payload, otherwise
 /// from `sequence`, otherwise the Kafka offset.
 pub fn project_kafka_json(
@@ -139,6 +144,7 @@ pub fn project_kafka_json(
     payload: &Value,
     offset: i64,
     ordering_field: Option<&str>,
+    path_map: &HashMap<String, String>,
 ) -> Option<SourceUpdate> {
     let object = payload.as_object()?;
     let id = json_id(object.get(entity_key)?)?;
@@ -151,7 +157,8 @@ pub fn project_kafka_json(
     let owned: std::collections::HashSet<&str> = owned_fields.iter().copied().collect();
     let mut fields = Map::new();
     for key in &owned {
-        if let Some(value) = object.get(*key) {
+        let physical = path_map.get(*key).map(String::as_str).unwrap_or(*key);
+        if let Some(value) = object.get(physical).or_else(|| object.get(*key)) {
             fields.insert((*key).to_string(), value.clone());
         }
     }
@@ -192,6 +199,7 @@ fn json_u64(value: &Value) -> Option<u64> {
 mod tests {
     use super::project_kafka_json;
     use serde_json::json;
+    use std::collections::HashMap;
 
     #[test]
     fn maps_owned_fields_and_sequence() {
@@ -209,6 +217,7 @@ mod tests {
             }),
             99,
             Some("sequence"),
+            &HashMap::new(),
         )
         .unwrap();
         assert_eq!(update.id, "1");
@@ -229,6 +238,7 @@ mod tests {
             &json!({"driver_id": "728", "location": {"lat": 1.0}}),
             17,
             None,
+            &HashMap::new(),
         )
         .unwrap();
         assert_eq!(update.id, "728");
@@ -251,9 +261,34 @@ mod tests {
             }),
             1,
             Some("seq"),
+            &HashMap::new(),
         )
         .unwrap();
         assert_eq!(update.versions.get("location"), Some(&7));
+    }
+
+    #[test]
+    fn remaps_physical_json_path() {
+        let owned = ["location"];
+        let mut path_map = HashMap::new();
+        path_map.insert("location".into(), "coords".into());
+        let update = project_kafka_json(
+            "gps",
+            "driver",
+            "driver_id",
+            &owned,
+            &json!({
+                "driver_id": 1,
+                "coords": {"lat": 1.0},
+                "sequence": 3
+            }),
+            1,
+            Some("sequence"),
+            &path_map,
+        )
+        .unwrap();
+        assert_eq!(update.fields["location"], json!({"lat": 1.0}));
+        assert!(!update.fields.contains_key("coords"));
     }
 
     #[test]
@@ -267,6 +302,7 @@ mod tests {
             &json!({"location": {"lat": 1.0}}),
             1,
             None,
+            &HashMap::new(),
         )
         .is_none());
     }

@@ -25,6 +25,10 @@ struct YamlField {
     ordering: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     flush_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    column: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
 }
 
 impl From<&FieldDef> for YamlField {
@@ -34,6 +38,8 @@ impl From<&FieldDef> for YamlField {
             mode: field.mode,
             ordering: field.ordering.clone(),
             flush_ms: field.flush_ms,
+            column: field.column.clone(),
+            path: field.path.clone(),
         }
     }
 }

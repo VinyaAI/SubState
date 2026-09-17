@@ -3,7 +3,8 @@
 use crate::hub::{DeliveryHub, SessionSubs};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, Request, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -18,24 +19,75 @@ use tracing::{info, warn};
 #[derive(Clone)]
 pub struct AppState {
     pub hub: Arc<DeliveryHub>,
+    pub api_key: Option<String>,
 }
 
-pub fn router(hub: Arc<DeliveryHub>) -> Router {
+pub fn router(hub: Arc<DeliveryHub>, api_key: Option<String>) -> Router {
+    let state = AppState {
+        hub,
+        api_key: api_key.clone(),
+    };
+    let v1 = Router::new()
+        .route("/cds", get(cds_dump))
+        .route("/cds/{entity}", get(cds_list))
+        .route("/cds/{entity}/{id}", get(cds_get))
+        .route("/sync", get(ws_upgrade))
+        .route("/ingest", post(ingest))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            require_api_key,
+        ));
+
     Router::new()
         .route("/health", get(health))
-        .route("/v1/cds", get(cds_dump))
-        .route("/v1/cds/{entity}", get(cds_list))
-        .route("/v1/cds/{entity}/{id}", get(cds_get))
-        .route("/v1/sync", get(ws_upgrade))
-        .route("/v1/ingest", post(ingest))
-        .with_state(AppState { hub })
+        .nest("/v1", v1)
+        .with_state(state)
 }
 
-pub async fn serve(bind_addr: &str, hub: Arc<DeliveryHub>) -> anyhow::Result<()> {
+pub async fn serve(
+    bind_addr: &str,
+    hub: Arc<DeliveryHub>,
+    api_key: Option<String>,
+) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind_addr).await?;
     info!(%bind_addr, "sync API listening (GET /v1/cds, ws /v1/sync, POST /v1/ingest)");
-    axum::serve(listener, router(hub)).await?;
+    axum::serve(listener, router(hub, api_key)).await?;
     Ok(())
+}
+
+async fn require_api_key(
+    State(state): State<AppState>,
+    request: Request<axum::body::Body>,
+    next: Next,
+) -> impl IntoResponse {
+    let Some(expected) = state.api_key.as_deref() else {
+        return next.run(request).await;
+    };
+    if extract_api_key(request.headers()).as_deref() == Some(expected) {
+        return next.run(request).await;
+    }
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "unauthorized: provide Authorization: Bearer <key> or x-api-key" })),
+    )
+        .into_response()
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers.get("x-api-key").and_then(|v| v.to_str().ok()) {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    let auth = headers.get(header::AUTHORIZATION)?.to_str().ok()?;
+    let bearer = auth.strip_prefix("Bearer ").or_else(|| auth.strip_prefix("bearer "))?;
+    let trimmed = bearer.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 async fn health() -> Json<Value> {

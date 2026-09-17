@@ -35,6 +35,8 @@ pub struct RuntimeConfig {
     pub schema_path: PathBuf,
     pub kafka_brokers: Option<Vec<String>>,
     pub postgres_follow: PostgresFollowMode,
+    /// When set, `/v1/*` requires this shared secret. `/health` stays open.
+    pub api_key: Option<String>,
 }
 
 impl RuntimeConfig {
@@ -70,6 +72,10 @@ impl RuntimeConfig {
                 Some(brokers)
             }
         });
+        let api_key = env::var("SUBSTATE_API_KEY")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
 
         Ok(Self {
             database_url,
@@ -80,6 +86,7 @@ impl RuntimeConfig {
             schema_path,
             kafka_brokers,
             postgres_follow: PostgresFollowMode::from_env()?,
+            api_key,
         })
     }
 

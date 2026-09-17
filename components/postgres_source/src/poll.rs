@@ -54,6 +54,7 @@ async fn poll_once(
 
         let rows = load_table(pool, pg_schema, table).await?;
         let owned = sync_schema.fields_owned_by(logical_name, source_id);
+        let column_map = sync_schema.column_map(logical_name, source_id);
         let pk = vec![entity.identity.field.clone()];
         let (updates, present) = project_postgres_rows(
             logical_name,
@@ -63,6 +64,7 @@ async fn poll_once(
             &pk,
             rows,
             None,
+            &column_map,
         );
 
         for update in updates {
