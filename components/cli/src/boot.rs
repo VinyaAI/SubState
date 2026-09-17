@@ -7,11 +7,13 @@ use crate::ws;
 use anyhow::{bail, Context, Result};
 use engine::Engine;
 use kafka_source::KafkaFollow;
+use mongo_source::MongoPollFollow;
+use mysql_source::MySqlPollFollow;
 use postgres_source::cdc::{
     ensure_publication, prepare_slot, wal_is_logical, PostgresCdcFollow,
 };
 use postgres_source::poll::PostgresPollFollow;
-use schema::{SyncSchema, SOURCE_KAFKA, SOURCE_POSTGRES};
+use schema::{SyncSchema, SOURCE_KAFKA, SOURCE_MONGODB, SOURCE_MYSQL, SOURCE_POSTGRES};
 use source::Follow;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -57,6 +59,8 @@ pub async fn start() -> Result<Runtime> {
 
     let wants_postgres = sync_schema.has_source_type(SOURCE_POSTGRES);
     let wants_kafka = sync_schema.has_source_type(SOURCE_KAFKA);
+    let wants_mysql = sync_schema.has_source_type(SOURCE_MYSQL);
+    let wants_mongo = sync_schema.has_source_type(SOURCE_MONGODB);
 
     tracing::info!(
         schema = %config.schema,
@@ -64,6 +68,8 @@ pub async fn start() -> Result<Runtime> {
         entities = sync_schema.entities.len(),
         postgres = wants_postgres,
         kafka = wants_kafka,
+        mysql = wants_mysql,
+        mongodb = wants_mongo,
         postgres_follow = ?config.postgres_follow,
         bind_addr = %config.bind_addr,
         "starting SubState"
@@ -74,6 +80,12 @@ pub async fn start() -> Result<Runtime> {
     }
     if wants_kafka && config.kafka_brokers.is_none() {
         bail!("schema has a kafka source but KAFKA_BROKERS is not set");
+    }
+    if wants_mysql && config.mysql_url.is_none() {
+        bail!("schema has a mysql source but MYSQL_URL is not set");
+    }
+    if wants_mongo && config.mongo_url.is_none() {
+        bail!("schema has a mongodb source but MONGO_URL is not set");
     }
 
     let (cds, pg_pool) = if wants_postgres {
@@ -111,7 +123,28 @@ pub async fn start() -> Result<Runtime> {
             brokers: config.kafka_brokers.clone().unwrap(),
             sync_schema: Arc::clone(&sync_schema),
         };
+        tasks.push(Box::new(follow).spawn(tx.clone()));
+    }
+
+    if wants_mysql {
+        let follow = MySqlPollFollow {
+            url: config.mysql_url.clone().unwrap(),
+            poll_ms: config.poll_ms,
+            sync_schema: Arc::clone(&sync_schema),
+        };
+        tasks.push(Box::new(follow).spawn(tx.clone()));
+    }
+
+    if wants_mongo {
+        let follow = MongoPollFollow {
+            url: config.mongo_url.clone().unwrap(),
+            database: config.mongo_database.clone(),
+            poll_ms: config.poll_ms,
+            sync_schema: Arc::clone(&sync_schema),
+        };
         tasks.push(Box::new(follow).spawn(tx));
+    } else {
+        drop(tx);
     }
 
     if config.api_key.is_none() {

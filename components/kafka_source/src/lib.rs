@@ -20,8 +20,8 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 pub use discover::{
-    discover_topics, infer_fields_from_samples, is_internal_topic, InferredField, TopicSample,
-    DEFAULT_SAMPLE_SIZE,
+    discover_topics, fields_from_json_schema, infer_fields_from_samples, is_internal_topic,
+    InferredField, TopicSample, DEFAULT_SAMPLE_SIZE,
 };
 
 pub const CONSUMER_GROUP: &str = "substate";
@@ -221,6 +221,9 @@ fn commit_offset(key: &str, next_offset: i64) {
 
 /// Map a JSON payload onto a [`SourceUpdate`].
 ///
+/// Accepts plain JSON objects or Debezium envelopes (`payload.after` /
+/// `payload.before` / top-level `after`).
+///
 /// `path_map` maps logical field → physical JSON key. Missing entries use the
 /// logical name.
 ///
@@ -236,12 +239,19 @@ pub fn project_kafka_json(
     ordering_field: Option<&str>,
     path_map: &HashMap<String, String>,
 ) -> Option<SourceUpdate> {
-    let object = payload.as_object()?;
+    let object = unwrap_debezium(payload)?.as_object()?;
     let id = json_id(object.get(entity_key)?)?;
     let version = ordering_field
         .and_then(|name| object.get(name))
         .and_then(json_u64)
         .or_else(|| object.get("sequence").and_then(json_u64))
+        .or_else(|| {
+            // Debezium source.ts_ms
+            payload
+                .pointer("/payload/source/ts_ms")
+                .or_else(|| payload.pointer("/source/ts_ms"))
+                .and_then(json_u64)
+        })
         .unwrap_or(offset as u64);
 
     let owned: std::collections::HashSet<&str> = owned_fields.iter().copied().collect();
@@ -265,6 +275,31 @@ pub fn project_kafka_json(
         fields,
         versions,
     })
+}
+
+/// Unwrap Debezium envelope to the row object (`after` preferred).
+pub fn unwrap_debezium(payload: &Value) -> Option<&Value> {
+    if let Some(after) = payload.pointer("/payload/after").filter(|v| !v.is_null()) {
+        return Some(after);
+    }
+    if let Some(after) = payload.get("after").filter(|v| !v.is_null()) {
+        return Some(after);
+    }
+    if let Some(before) = payload.pointer("/payload/before").filter(|v| !v.is_null()) {
+        return Some(before);
+    }
+    // Plain JSON object
+    if payload.as_object().is_some()
+        && payload.get("schema").is_none()
+        && payload.get("payload").is_none()
+    {
+        return Some(payload);
+    }
+    // Envelope without after/before (tombstone / delete) — no row
+    if payload.get("payload").is_some() || payload.get("schema").is_some() {
+        return None;
+    }
+    Some(payload)
 }
 
 fn json_id(value: &Value) -> Option<String> {
@@ -379,6 +414,32 @@ mod tests {
         .unwrap();
         assert_eq!(update.fields["location"], json!({"lat": 1.0}));
         assert!(!update.fields.contains_key("coords"));
+    }
+
+    #[test]
+    fn unwraps_debezium_envelope() {
+        let owned = ["status", "id"];
+        let update = project_kafka_json(
+            "postgres",
+            "driver",
+            "id",
+            &owned,
+            &json!({
+                "schema": { "type": "struct" },
+                "payload": {
+                    "after": { "id": 7, "status": "available" },
+                    "before": null,
+                    "source": { "ts_ms": 99 }
+                }
+            }),
+            1,
+            None,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(update.id, "7");
+        assert_eq!(update.fields["status"], json!("available"));
+        assert_eq!(update.versions.get("status"), Some(&99));
     }
 
     #[test]

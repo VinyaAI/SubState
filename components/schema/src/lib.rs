@@ -163,6 +163,8 @@ pub enum FieldMode {
 pub const SOURCE_POSTGRES: &str = "postgres";
 pub const SOURCE_KAFKA: &str = "kafka";
 pub const SOURCE_HTTP: &str = "http";
+pub const SOURCE_MYSQL: &str = "mysql";
+pub const SOURCE_MONGODB: &str = "mongodb";
 
 impl SyncSchema {
     pub fn from_yaml_str(yaml: &str) -> Result<Self> {
@@ -255,10 +257,24 @@ impl SyncSchema {
                         }
                     }
                     SOURCE_HTTP => {}
+                    SOURCE_MYSQL => {
+                        if source.table.as_ref().map_or(true, |t| t.is_empty()) {
+                            bail!(
+                                "entity '{name}' mysql source '{source_id}' requires a table name"
+                            );
+                        }
+                    }
+                    SOURCE_MONGODB => {
+                        if source.table.as_ref().map_or(true, |t| t.is_empty()) {
+                            bail!(
+                                "entity '{name}' mongodb source '{source_id}' requires a collection name in `table`"
+                            );
+                        }
+                    }
                     other => {
                         bail!(
                             "entity '{name}' source '{source_id}' has unsupported type '{other}' \
-                             (supported: postgres, kafka, http)"
+                             (supported: postgres, kafka, http, mysql, mongodb)"
                         );
                     }
                 }
@@ -558,9 +574,9 @@ entities:
   driver:
     identity: { field: id }
     sources:
-      mongo: { type: mongodb }
+      oracle: { type: oracle }
     fields:
-      id: { source: mongo }
+      id: { source: oracle }
 "#;
         let err = SyncSchema::from_yaml_str(bad).unwrap_err().to_string();
         assert!(err.contains("unsupported type"), "{err}");

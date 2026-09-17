@@ -37,6 +37,9 @@ pub struct RuntimeConfig {
     pub postgres_follow: PostgresFollowMode,
     /// When set, `/v1/*` requires this shared secret. `/health` stays open.
     pub api_key: Option<String>,
+    pub mysql_url: Option<String>,
+    pub mongo_url: Option<String>,
+    pub mongo_database: String,
 }
 
 impl RuntimeConfig {
@@ -76,6 +79,10 @@ impl RuntimeConfig {
             .ok()
             .map(|s| s.trim().to_string())
             .filter(|s| !s.is_empty());
+        let mysql_url = env::var("MYSQL_URL").ok().filter(|s| !s.is_empty());
+        let mongo_url = env::var("MONGO_URL").ok().filter(|s| !s.is_empty());
+        let mongo_database =
+            env::var("MONGO_DATABASE").unwrap_or_else(|_| "substate".to_string());
 
         Ok(Self {
             database_url,
@@ -87,6 +94,9 @@ impl RuntimeConfig {
             kafka_brokers,
             postgres_follow: PostgresFollowMode::from_env()?,
             api_key,
+            mysql_url,
+            mongo_url,
+            mongo_database,
         })
     }
 

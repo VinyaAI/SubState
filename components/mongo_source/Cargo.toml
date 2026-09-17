@@ -1,0 +1,15 @@
+[package]
+name = "mongo_source"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+cds = { workspace = true }
+futures-util = { workspace = true }
+mongodb = "3"
+schema = { workspace = true }
+serde_json = { workspace = true }
+source = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

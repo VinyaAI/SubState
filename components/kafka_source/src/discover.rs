@@ -106,17 +106,21 @@ async fn sample_topic(
             continue;
         };
         match serde_json::from_slice::<Value>(&bytes) {
-            Ok(Value::Object(map)) => {
+            Ok(value) => {
                 sample_count += 1;
-                for (key, value) in map {
-                    type_votes
-                        .entry(key)
-                        .or_default()
-                        .insert(json_type_label(&value));
+                let row = crate::unwrap_debezium(&value).unwrap_or(&value);
+                if let Some(fields) = fields_from_json_schema(row) {
+                    for (name, ty) in fields {
+                        type_votes.entry(name).or_default().insert(ty);
+                    }
+                } else if let Some(map) = row.as_object() {
+                    for (key, value) in map {
+                        type_votes
+                            .entry(key.clone())
+                            .or_default()
+                            .insert(json_type_label(value));
+                    }
                 }
-            }
-            Ok(_) => {
-                sample_count += 1;
             }
             Err(_) => {
                 non_json_count += 1;
@@ -156,6 +160,37 @@ fn json_type_label(value: &Value) -> &'static str {
         Value::Array(_) => "array",
         Value::Object(_) => "object",
     }
+}
+
+/// If `value` looks like a JSON Schema document, return property names + types.
+pub fn fields_from_json_schema(value: &Value) -> Option<Vec<(String, &'static str)>> {
+    let obj = value.as_object()?;
+    let props = obj.get("properties")?.as_object()?;
+    if props.is_empty() {
+        return None;
+    }
+    // Require schema-ish markers so plain data objects aren't treated as schemas.
+    if obj.get("$schema").is_none() && obj.get("type").and_then(|t| t.as_str()) != Some("object") {
+        return None;
+    }
+    let mut out = Vec::new();
+    for (name, schema) in props {
+        let ty = schema
+            .get("type")
+            .and_then(|t| t.as_str())
+            .map(|t| match t {
+                "string" => "string",
+                "number" | "integer" => "number",
+                "boolean" => "boolean",
+                "array" => "array",
+                "object" => "object",
+                "null" => "null",
+                _ => "mixed",
+            })
+            .unwrap_or("mixed");
+        out.push((name.clone(), ty));
+    }
+    Some(out)
 }
 
 /// Infer a field-union from in-memory JSON objects (unit-test helper).

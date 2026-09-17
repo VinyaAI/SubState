@@ -18,6 +18,8 @@ dotenvy = { workspace = true }
 engine = { workspace = true }
 futures-util = { workspace = true }
 kafka_source = { workspace = true }
+mysql_source = { workspace = true }
+mongo_source = { workspace = true }
 postgres_source = { workspace = true }
 schema = { workspace = true }
 schema_gen = { workspace = true }
