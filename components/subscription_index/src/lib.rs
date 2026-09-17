@@ -1,9 +1,10 @@
 //! Subscription Index: who cares about which CDS fields?
 //!
-//! v1 is coarse and equality-only:
-//! - subscribe to an entity type with `where field=value` filters (AND)
-//! - field dependency map: (entity_type, field) → subscription ids
-//! - on Change, return candidate subscription ids to re-check
+//! Filters support:
+//! - equality: `{ "status": "available" }` (AND across keys)
+//! - comparisons: `{ "speed": { "gt": 5 } }` / `gte` / `lt` / `lte`
+//! - OR: `{ "$or": [ { "status": "available" }, { "status": "busy" } ] }`
+//! - nested AND via `$and`
 
 use cds::{Change, EntityState};
 use serde_json::{Map, Value};
@@ -15,7 +16,7 @@ pub type SubId = String;
 pub struct Subscription {
     pub id: SubId,
     pub entity_type: String,
-    /// Equality filters; every key must match the entity fields.
+    /// Filter document (equality / comparisons / $or / $and).
     pub where_eq: Map<String, Value>,
 }
 
@@ -65,9 +66,9 @@ impl SubscriptionIndex {
             .or_default()
             .push(id.clone());
 
-        for field in where_eq.keys() {
+        for field in referenced_fields(&where_eq) {
             self.by_field
-                .entry((entity_type.clone(), field.clone()))
+                .entry((entity_type.clone(), field))
                 .or_default()
                 .push(id.clone());
         }
@@ -84,8 +85,8 @@ impl SubscriptionIndex {
         if let Some(list) = self.by_type.get_mut(&sub.entity_type) {
             list.retain(|existing| existing != id);
         }
-        for field in sub.where_eq.keys() {
-            if let Some(list) = self.by_field.get_mut(&(sub.entity_type.clone(), field.clone())) {
+        for field in referenced_fields(&sub.where_eq) {
+            if let Some(list) = self.by_field.get_mut(&(sub.entity_type.clone(), field)) {
                 list.retain(|existing| existing != id);
             }
         }
@@ -102,12 +103,6 @@ impl SubscriptionIndex {
         subs
     }
 
-    /// Candidate subscription ids that may be affected by this CDS change.
-    ///
-    /// Updates notify every subscription on the entity type — not only those
-    /// whose filter fields changed. A filtered sub still needs patches when a
-    /// non-filter field changes on an entity it already holds (User State
-    /// decides Add / Update / Remove / ignore).
     pub fn candidates(&self, change: &Change) -> Vec<SubId> {
         let mut ids: HashSet<SubId> = HashSet::new();
 
@@ -120,11 +115,154 @@ impl SubscriptionIndex {
         out
     }
 
-    /// True when every where clause equals the entity's field value.
+    /// Evaluate the subscription filter against entity state.
     pub fn matches(sub: &Subscription, state: &EntityState) -> bool {
-        sub.where_eq.iter().all(|(key, expected)| {
-            state.fields.get(key).map(|actual| actual == expected).unwrap_or(false)
+        matches_doc(&sub.where_eq, state)
+    }
+}
+
+fn referenced_fields(doc: &Map<String, Value>) -> Vec<String> {
+    let mut out = Vec::new();
+    collect_fields(doc, &mut out);
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_fields(doc: &Map<String, Value>, out: &mut Vec<String>) {
+    for (key, value) in doc {
+        if key == "$or" || key == "$and" {
+            if let Some(arr) = value.as_array() {
+                for item in arr {
+                    if let Some(obj) = item.as_object() {
+                        collect_fields(obj, out);
+                    }
+                }
+            }
+            continue;
+        }
+        out.push(key.clone());
+    }
+}
+
+fn matches_doc(doc: &Map<String, Value>, state: &EntityState) -> bool {
+    if doc.is_empty() {
+        return true;
+    }
+    for (key, expected) in doc {
+        if key == "$or" {
+            let Some(arr) = expected.as_array() else {
+                return false;
+            };
+            if arr.is_empty() {
+                return false;
+            }
+            let any = arr.iter().any(|item| {
+                item.as_object()
+                    .map(|obj| matches_doc(obj, state))
+                    .unwrap_or(false)
+            });
+            if !any {
+                return false;
+            }
+            continue;
+        }
+        if key == "$and" {
+            let Some(arr) = expected.as_array() else {
+                return false;
+            };
+            if !arr.iter().all(|item| {
+                item.as_object()
+                    .map(|obj| matches_doc(obj, state))
+                    .unwrap_or(false)
+            }) {
+                return false;
+            }
+            continue;
+        }
+        let Some(actual) = state.fields.get(key) else {
+            return false;
+        };
+        if !match_predicate(actual, expected) {
+            return false;
+        }
+    }
+    true
+}
+
+fn match_predicate(actual: &Value, expected: &Value) -> bool {
+    match expected {
+        Value::Object(ops) if is_operator_object(ops) => {
+            for (op, rhs) in ops {
+                match op.as_str() {
+                    "eq" => {
+                        if actual != rhs {
+                            return false;
+                        }
+                    }
+                    "gt" => {
+                        if !compare(actual, rhs).map(|o| o.is_gt()).unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    "gte" => {
+                        if !compare(actual, rhs).map(|o| o.is_ge()).unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    "lt" => {
+                        if !compare(actual, rhs).map(|o| o.is_lt()).unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    "lte" => {
+                        if !compare(actual, rhs).map(|o| o.is_le()).unwrap_or(false) {
+                            return false;
+                        }
+                    }
+                    "ne" => {
+                        if actual == rhs {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+            true
+        }
+        other => actual == other,
+    }
+}
+
+fn is_operator_object(ops: &Map<String, Value>) -> bool {
+    !ops.is_empty()
+        && ops.keys().all(|k| {
+            matches!(
+                k.as_str(),
+                "eq" | "gt" | "gte" | "lt" | "lte" | "ne"
+            )
         })
+}
+
+fn compare(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+    match (left, right) {
+        (Value::Number(a), Value::Number(b)) => {
+            let af = a.as_f64()?;
+            let bf = b.as_f64()?;
+            af.partial_cmp(&bf)
+        }
+        (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+        (Value::String(a), Value::Number(b)) => {
+            let af: f64 = a.parse().ok()?;
+            let bf = b.as_f64()?;
+            af.partial_cmp(&bf)
+        }
+        (Value::Number(a), Value::String(b)) => {
+            let af = a.as_f64()?;
+            let bf: f64 = b.parse().ok()?;
+            af.partial_cmp(&bf)
+        }
+        _ => None,
     }
 }
 
@@ -136,7 +274,7 @@ mod tests {
 
     fn state(status: &str, region: &str) -> EntityState {
         EntityState::from_fields(
-            json!({"status": status, "region": region})
+            json!({"status": status, "region": region, "speed": 10})
                 .as_object()
                 .cloned()
                 .unwrap(),
@@ -160,6 +298,44 @@ mod tests {
         assert!(!SubscriptionIndex::matches(
             &sub,
             &state("busy", "nashville")
+        ));
+    }
+
+    #[test]
+    fn matches_range_and_or() {
+        let mut index = SubscriptionIndex::new();
+        let sub = index.subscribe(
+            "drivers",
+            json!({
+                "speed": { "gte": 5 },
+                "$or": [
+                    { "status": "available" },
+                    { "status": "busy" }
+                ]
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+        );
+        assert!(SubscriptionIndex::matches(&sub, &state("available", "x")));
+        assert!(SubscriptionIndex::matches(&sub, &state("busy", "x")));
+        assert!(!SubscriptionIndex::matches(
+            &sub,
+            &EntityState::from_fields(
+                json!({"status": "offline", "speed": 10})
+                    .as_object()
+                    .cloned()
+                    .unwrap()
+            )
+        ));
+        assert!(!SubscriptionIndex::matches(
+            &sub,
+            &EntityState::from_fields(
+                json!({"status": "available", "speed": 1})
+                    .as_object()
+                    .cloned()
+                    .unwrap()
+            )
         ));
     }
 
@@ -189,8 +365,6 @@ mod tests {
         };
         assert_eq!(index.candidates(&update_status), vec![sub.id.clone()]);
 
-        // Non-filter field updates must still wake filtered subscriptions so
-        // in-membership entities get UPDATE patches (e.g. dob while filtering on name).
         let update_name = Change {
             entity_type: "drivers".to_string(),
             id: "1".to_string(),

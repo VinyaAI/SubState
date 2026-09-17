@@ -134,6 +134,14 @@ export class SubStateClient {
     });
   }
 
+  /**
+   * Subscribe with an explicit filter document.
+   * Supports equality, `{ gt|gte|lt|lte|ne }`, `$or`, and `$and`.
+   */
+  subscribeWhere(entityType: string, where: Record<string, unknown>): void {
+    this.subscribe(entityType, where);
+  }
+
   resume(subscription: string, resumeAfter: number): void {
     this.send({
       type: "resume",
