@@ -92,6 +92,13 @@ pub async fn start() -> Result<Runtime> {
     let engine = Arc::new(RwLock::new(Engine::new(cds, (*sync_schema).clone())));
     let hub = Arc::new(DeliveryHub::new(Arc::clone(&engine)));
 
+    let snapshot_path = crate::persist::default_snapshot_path();
+    match hub.restore_snapshot(&snapshot_path).await {
+        Ok(true) => tracing::info!(path = %snapshot_path.display(), "loaded SubState snapshot"),
+        Ok(false) => {}
+        Err(err) => tracing::warn!(error = %err, path = %snapshot_path.display(), "failed to load snapshot"),
+    }
+
     let (tx, rx) = mpsc::channel(1024);
     let mut tasks = vec![dispatch::spawn(Arc::clone(&hub), rx)];
 
@@ -119,6 +126,18 @@ pub async fn start() -> Result<Runtime> {
         loop {
             ticker.tick().await;
             coalesce_hub.flush_coalesced().await;
+        }
+    }));
+
+    let persist_hub = Arc::clone(&hub);
+    let persist_path = snapshot_path.clone();
+    tasks.push(tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+        loop {
+            ticker.tick().await;
+            if let Err(err) = persist_hub.save_snapshot(&persist_path).await {
+                tracing::warn!(error = %err, "failed to save SubState snapshot");
+            }
         }
     }));
 

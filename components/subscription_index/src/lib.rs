@@ -37,6 +37,22 @@ impl SubscriptionIndex {
     pub fn subscribe(&mut self, entity_type: impl Into<String>, where_eq: Map<String, Value>) -> Subscription {
         self.next_id += 1;
         let id = format!("sub_{}", self.next_id);
+        self.subscribe_with_id(id, entity_type, where_eq)
+    }
+
+    /// Restore a subscription with a known id (for disk snapshots).
+    pub fn subscribe_with_id(
+        &mut self,
+        id: impl Into<String>,
+        entity_type: impl Into<String>,
+        where_eq: Map<String, Value>,
+    ) -> Subscription {
+        let id = id.into();
+        if let Some(num) = id.strip_prefix("sub_").and_then(|s| s.parse::<u64>().ok()) {
+            if num > self.next_id {
+                self.next_id = num;
+            }
+        }
         let entity_type = entity_type.into();
         let sub = Subscription {
             id: id.clone(),
@@ -49,8 +65,6 @@ impl SubscriptionIndex {
             .or_default()
             .push(id.clone());
 
-        // Index every filter field so updates to those fields can find this sub.
-        // Also index a sentinel for empty-where (match-all) via by_type only.
         for field in where_eq.keys() {
             self.by_field
                 .entry((entity_type.clone(), field.clone()))

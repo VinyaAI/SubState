@@ -43,7 +43,7 @@ pub struct SnapshotEntity {
 pub struct ResetNeeded;
 
 /// Ring buffer of the last [`HISTORY_CAP`] deltas for one subscription.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeltaHistory {
     next_seq: u64,
     entries: VecDeque<Delta>,

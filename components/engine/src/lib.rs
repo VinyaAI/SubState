@@ -291,12 +291,33 @@ impl Engine {
         entity_type: impl Into<String>,
         where_eq: Map<String, Value>,
     ) -> Result<(Subscription, UserState), String> {
-        let entity_type = entity_type.into();
+        self.subscribe_inner(None, entity_type.into(), where_eq)
+    }
+
+    /// Restore a subscription with a known id (disk snapshot).
+    pub fn restore_subscription(
+        &mut self,
+        id: impl Into<String>,
+        entity_type: impl Into<String>,
+        where_eq: Map<String, Value>,
+    ) -> Result<(Subscription, UserState), String> {
+        self.subscribe_inner(Some(id.into()), entity_type.into(), where_eq)
+    }
+
+    fn subscribe_inner(
+        &mut self,
+        id: Option<String>,
+        entity_type: String,
+        where_eq: Map<String, Value>,
+    ) -> Result<(Subscription, UserState), String> {
         if !self.schema.has_entity(&entity_type) && !self.cds.has_entity_type(&entity_type) {
             return Err(format!("unknown entity '{entity_type}'"));
         }
 
-        let sub = self.index.subscribe(entity_type.clone(), where_eq);
+        let sub = match id {
+            Some(id) => self.index.subscribe_with_id(id, entity_type.clone(), where_eq),
+            None => self.index.subscribe(entity_type.clone(), where_eq),
+        };
         let mut user_state = UserState::new(sub.id.clone());
         for (id, state) in self.cds.iter_type(&entity_type) {
             if SubscriptionIndex::matches(&sub, state) {

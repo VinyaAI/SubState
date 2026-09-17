@@ -10,6 +10,8 @@ mod config;
 mod dispatch;
 mod hub;
 mod init;
+mod metrics;
+mod persist;
 mod shell;
 mod ws;
 

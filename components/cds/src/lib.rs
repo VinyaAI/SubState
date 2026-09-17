@@ -4,12 +4,12 @@
 //! metadata tracks authority (`source`) and a source-local `version` so
 //! updates from one backend cannot wipe another.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 
 /// Identity of one entity inside the CDS.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct EntityId {
     /// Logical entity type from the sync schema, e.g. `"driver"`.
     pub entity_type: String,
@@ -18,14 +18,14 @@ pub struct EntityId {
 }
 
 /// Per-field authority and source-local version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FieldMeta {
     pub source: String,
     pub version: u64,
 }
 
 /// Current field values for one entity.
-#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct EntityState {
     pub fields: Map<String, Value>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
@@ -42,7 +42,7 @@ impl EntityState {
 }
 
 /// Metadata for one successfully loaded logical entity type.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TableCatalog {
     pub name: String,
     pub primary_key: Vec<String>,
@@ -51,14 +51,14 @@ pub struct TableCatalog {
 }
 
 /// A table we discovered but chose not to load.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkippedTable {
     pub name: String,
     pub reason: String,
 }
 
 /// Lightweight catalog shown by the `tables` shell command.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Catalog {
     pub schema: String,
     pub tables: Vec<TableCatalog>,
@@ -354,6 +354,30 @@ impl Cds {
 
     pub fn entity_count(&self) -> usize {
         self.entities.len()
+    }
+
+    /// Export all entities for persistence (order not guaranteed).
+    pub fn export_entities(&self) -> Vec<(EntityId, EntityState)> {
+        self.entities
+            .iter()
+            .map(|(id, state)| (id.clone(), state.clone()))
+            .collect()
+    }
+
+    /// Replace entity map from a persisted snapshot. Catalog labels stay;
+    /// row counts are recomputed.
+    pub fn import_entities(&mut self, entities: Vec<(EntityId, EntityState)>) {
+        self.entities.clear();
+        for (id, state) in entities {
+            self.entities.insert(id, state);
+        }
+        for table in &mut self.catalog.tables {
+            table.row_count = self
+                .entities
+                .keys()
+                .filter(|id| id.entity_type == table.name)
+                .count();
+        }
     }
 
     fn bump_row_count(&mut self, entity_type: &str, delta: i64) {

@@ -73,16 +73,74 @@ async fn consume_binding(
         .await
         .context("kafka client")?;
 
-    let partition_client = client
-        .partition_client(binding.topic.clone(), 0, UnknownTopicHandling::Retry)
-        .await
-        .with_context(|| format!("kafka partition client for {}", binding.topic))?;
+    let topics = client.list_topics().await.context("list kafka topics")?;
+    let partitions: Vec<i32> = topics
+        .iter()
+        .find(|t| t.name == binding.topic)
+        .map(|t| t.partitions.iter().copied().collect())
+        .unwrap_or_else(|| vec![0]);
 
-    let mut stream = StreamConsumerBuilder::new(Arc::new(partition_client), StartOffset::Latest)
+    info!(
+        topic = %binding.topic,
+        entity = %binding.entity_type,
+        partitions = partitions.len(),
+        "consuming kafka topic"
+    );
+
+    let mut tasks = Vec::new();
+    for partition in partitions {
+        let tx = tx.clone();
+        let brokers = brokers.to_vec();
+        let binding = binding.clone();
+        let schema = Arc::clone(&sync_schema);
+        tasks.push(tokio::spawn(async move {
+            if let Err(err) =
+                consume_partition(&brokers, binding, schema, partition, tx).await
+            {
+                error!(error = %err, partition, "kafka partition consumer exited");
+            }
+        }));
+    }
+    for task in tasks {
+        let _ = task.await;
+    }
+    Ok(())
+}
+
+async fn consume_partition(
+    brokers: &[String],
+    binding: KafkaBinding,
+    sync_schema: Arc<SyncSchema>,
+    partition: i32,
+    tx: mpsc::Sender<SourceEvent>,
+) -> Result<()> {
+    let client = ClientBuilder::new(brokers.to_vec())
+        .build()
+        .await
+        .context("kafka client")?;
+
+    let partition_client = client
+        .partition_client(
+            binding.topic.clone(),
+            partition,
+            UnknownTopicHandling::Retry,
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "kafka partition client for {} partition {}",
+                binding.topic, partition
+            )
+        })?;
+
+    let offset_key = format!("{}:{}", binding.topic, partition);
+    let start = load_committed_offset(&offset_key)
+        .map(StartOffset::At)
+        .unwrap_or(StartOffset::Latest);
+
+    let mut stream = StreamConsumerBuilder::new(Arc::new(partition_client), start)
         .with_max_wait_ms(500)
         .build();
-
-    info!(topic = %binding.topic, entity = %binding.entity_type, "consuming kafka topic");
 
     let ordering = sync_schema
         .ordering_for_source(&binding.entity_type, &binding.source_id)
@@ -92,7 +150,12 @@ async fn consume_binding(
         let (record, _high_watermark) = match item {
             Ok(pair) => pair,
             Err(err) => {
-                warn!(error = %err, topic = %binding.topic, "kafka fetch failed");
+                warn!(
+                    error = %err,
+                    topic = %binding.topic,
+                    partition,
+                    "kafka fetch failed"
+                );
                 continue;
             }
         };
@@ -125,8 +188,35 @@ async fn consume_binding(
         if tx.send(SourceEvent::Upsert(update)).await.is_err() {
             return Ok(());
         }
+        // Commit next offset to read (offset + 1).
+        commit_offset(&offset_key, offset + 1);
     }
     Ok(())
+}
+
+fn offsets_path() -> std::path::PathBuf {
+    std::env::var("SUBSTATE_KAFKA_OFFSETS_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("./substate-kafka-offsets.json"))
+}
+
+fn load_committed_offset(key: &str) -> Option<i64> {
+    let path = offsets_path();
+    let text = std::fs::read_to_string(path).ok()?;
+    let map: HashMap<String, i64> = serde_json::from_str(&text).ok()?;
+    map.get(key).copied()
+}
+
+fn commit_offset(key: &str, next_offset: i64) {
+    let path = offsets_path();
+    let mut map: HashMap<String, i64> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    map.insert(key.to_string(), next_offset);
+    if let Ok(text) = serde_json::to_string_pretty(&map) {
+        let _ = std::fs::write(path, text);
+    }
 }
 
 /// Map a JSON payload onto a [`SourceUpdate`].

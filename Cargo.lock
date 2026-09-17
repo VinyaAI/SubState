@@ -2001,6 +2001,7 @@ dependencies = [
  "serde_json",
  "source",
  "subscription_index",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

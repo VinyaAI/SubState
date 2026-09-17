@@ -40,6 +40,7 @@ pub fn router(hub: Arc<DeliveryHub>, api_key: Option<String>) -> Router {
 
     Router::new()
         .route("/health", get(health))
+        .route("/metrics", get(metrics_endpoint))
         .nest("/v1", v1)
         .with_state(state)
 }
@@ -92,6 +93,16 @@ fn extract_api_key(headers: &HeaderMap) -> Option<String> {
 
 async fn health() -> Json<Value> {
     Json(json!({ "status": "ok" }))
+}
+
+async fn metrics_endpoint() -> impl IntoResponse {
+    (
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        crate::metrics::render_prometheus(),
+    )
 }
 
 #[derive(Debug, Deserialize)]
@@ -226,6 +237,11 @@ async fn ingest(
     match state.hub.apply_and_publish(update).await {
         Ok(changed_fields) => {
             let accepted = !changed_fields.is_empty();
+            if accepted {
+                crate::metrics::ingest_accepted();
+            } else {
+                crate::metrics::ingest_rejected();
+            }
             (
                 axum::http::StatusCode::OK,
                 Json(json!({
@@ -234,13 +250,16 @@ async fn ingest(
                 })),
             )
         }
-        Err(message) => (
-            axum::http::StatusCode::BAD_REQUEST,
-            Json(json!({
-                "accepted": false,
-                "error": message,
-            })),
-        ),
+        Err(message) => {
+            crate::metrics::ingest_rejected();
+            (
+                axum::http::StatusCode::BAD_REQUEST,
+                Json(json!({
+                    "accepted": false,
+                    "error": message,
+                })),
+            )
+        }
     }
 }
 
@@ -304,9 +323,11 @@ fn delta_json(delta: &Delta) -> Value {
 }
 
 async fn handle_socket(socket: WebSocket, state: AppState) {
+    crate::metrics::ws_connect();
     let (mut sender, mut receiver) = socket.split();
     let mut events = state.hub.subscribe_events();
     let mut session = SessionSubs::default();
+    let mut backpressured = false;
 
     loop {
         tokio::select! {
@@ -320,6 +341,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     &mut session,
                                     &mut sender,
                                     msg,
+                                    &mut backpressured,
                                 ).await {
                                     let _ = send_json(&mut sender, &ServerMessage::Error { message: err }).await;
                                 }
@@ -348,20 +370,38 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             event = events.recv() => {
                 match event {
                     Ok(crate::hub::HubEvent::Delta(delta)) => {
+                        if backpressured {
+                            continue;
+                        }
                         if session.contains(&delta.subscription) {
-                            let _ = sender
+                            match sender
                                 .send(Message::Text(delta_json(&delta).to_string().into()))
-                                .await;
+                                .await
+                            {
+                                Ok(()) => {}
+                                Err(_) => {
+                                    // Slow / closed client: stop live deltas and mark for reset.
+                                    backpressured = true;
+                                    crate::metrics::ws_backpressure_reset();
+                                    warn!(
+                                        subscription = %delta.subscription,
+                                        "websocket backpressure; pausing deltas until resume"
+                                    );
+                                }
+                            }
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(_)) => {
                         // Drop lagged events; client can resume.
+                        backpressured = true;
+                        crate::metrics::ws_backpressure_reset();
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
     }
+    crate::metrics::ws_disconnect();
 }
 
 async fn handle_client_message(
@@ -369,6 +409,7 @@ async fn handle_client_message(
     session: &mut SessionSubs,
     sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     msg: ClientMessage,
+    backpressured: &mut bool,
 ) -> Result<(), String> {
     match msg {
         ClientMessage::Subscribe {
@@ -377,6 +418,7 @@ async fn handle_client_message(
         } => {
             let (sub_id, entities) = state.hub.subscribe(entity_type, filter).await?;
             session.insert(sub_id.clone());
+            *backpressured = false;
             send_json(
                 sender,
                 &ServerMessage::Subscribed {
@@ -401,6 +443,27 @@ async fn handle_client_message(
                 return Err(format!("unknown subscription '{subscription}'"));
             }
             session.insert(subscription.clone());
+            if *backpressured {
+                *backpressured = false;
+                send_json(
+                    sender,
+                    &ServerMessage::Reset {
+                        subscription: subscription.clone(),
+                        reason: "backpressure".to_string(),
+                    },
+                )
+                .await?;
+                let entities = state.hub.snapshot_for(&subscription).await?;
+                send_json(
+                    sender,
+                    &ServerMessage::Snapshot {
+                        subscription,
+                        entities,
+                    },
+                )
+                .await?;
+                return Ok(());
+            }
             match state.hub.resume_since(&subscription, resume_after).await? {
                 Ok(deltas) => {
                     for delta in deltas {

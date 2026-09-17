@@ -42,6 +42,10 @@ impl DeliveryHub {
 
     /// Process poller transitions: assign seqs, store history, broadcast deltas.
     pub async fn publish_transitions(&self, transitions: Vec<Transition>) {
+        if transitions.is_empty() {
+            return;
+        }
+        crate::metrics::deltas_published(transitions.len() as u64);
         let mut histories = self.histories.write().await;
         for transition in &transitions {
             let delivery = histories
@@ -73,7 +77,39 @@ impl DeliveryHub {
             let mut engine = self.engine.write().await;
             engine.flush_coalesced(std::time::Instant::now())
         };
+        if !transitions.is_empty() {
+            crate::metrics::coalesce_flush();
+        }
         self.publish_transitions(transitions).await;
+    }
+
+    /// Persist CDS + subscriptions + histories to disk.
+    pub async fn save_snapshot(&self, path: &std::path::Path) -> anyhow::Result<()> {
+        let engine = self.engine.read().await;
+        let histories = self.histories.read().await;
+        let map: HashMap<String, DeltaHistory> = histories
+            .iter()
+            .map(|(k, v)| (k.clone(), v.history.clone()))
+            .collect();
+        crate::persist::save(path, &engine, &map)?;
+        crate::metrics::snapshot_saved();
+        Ok(())
+    }
+
+    /// Restore subscriptions/histories and overlay stream fields from disk.
+    pub async fn restore_snapshot(&self, path: &std::path::Path) -> anyhow::Result<bool> {
+        let Some(snap) = crate::persist::load(path)? else {
+            return Ok(false);
+        };
+        let mut engine = self.engine.write().await;
+        let mut histories = self.histories.write().await;
+        let mut map: HashMap<String, DeltaHistory> = HashMap::new();
+        crate::persist::restore_into(&mut engine, &mut map, snap);
+        histories.clear();
+        for (id, history) in map {
+            histories.insert(id, SubDelivery { history });
+        }
+        Ok(true)
     }
 
     /// Delete an entity (CDC delete or poll reconcile).

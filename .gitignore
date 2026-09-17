@@ -3,3 +3,6 @@
 node_modules/
 clients/typescript/dist/
 schema.yaml
+substate-snapshot.json
+substate-snapshot.json.tmp
+substate-kafka-offsets.json
