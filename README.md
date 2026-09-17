@@ -75,6 +75,18 @@ curl http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
 
+### Verify (smoke)
+
+On a machine with Docker, Rust, and **Node 20+**:
+
+```bash
+./scripts/smoke.sh
+```
+
+This boots Postgres in Docker, runs `substate serve`, checks `/health` + CDS,
+then confirms WebSocket subscribe + HTTP ingest delivers a delta. CI runs the
+same script.
+
 | Env | Meaning |
 | --- | --- |
 | `DATABASE_URL` | Postgres URL for sources / `init` scan |

@@ -1,0 +1,22 @@
+# Fixture schema for scripts/smoke.sh — Postgres snapshot + HTTP live field.
+entities:
+  driver:
+    identity:
+      field: id
+    sources:
+      pg:
+        type: postgres
+        table: drivers
+      http:
+        type: http
+    fields:
+      id:
+        source: pg
+        mode: transactional
+      status:
+        source: pg
+        mode: transactional
+      location:
+        source: http
+        mode: latest_value
+        flush_ms: 100

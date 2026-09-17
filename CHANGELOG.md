@@ -9,6 +9,11 @@ between commits without a major version bump.
 
 ## [Unreleased]
 
+### Added
+
+- `./scripts/smoke.sh` end-to-end check (Postgres-in-Docker, `/health`, CDS,
+  WebSocket subscribe + HTTP ingest) and a CI `smoke` job
+
 ### Changed
 
 - Docs spell out the ~500-delta resume window and shipped WS backpressure

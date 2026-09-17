@@ -21,6 +21,8 @@ cd clients/typescript && npm install && npm run build
 ## Before you open a PR
 
 - Run `cargo test` (and the TS client build if you touched `clients/typescript`).
+- If you changed serve / boot / WS / ingest / Postgres follow, also run
+  `./scripts/smoke.sh` (needs Docker + Node 20+).
 - Keep diffs scoped: one concern per PR when practical.
 - Do not commit `.env`, secrets, or customer data.
 - Match existing code style; prefer clarifying names over comments.
