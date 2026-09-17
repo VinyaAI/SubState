@@ -1,0 +1,116 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
+  background: #0b1020;
+  color: #e8eefc;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
+}
+
+.panel {
+  padding: 1rem 1.1rem;
+  border-right: 1px solid #24304d;
+  background: #11182b;
+}
+
+.panel h1 {
+  font-size: 1.1rem;
+  margin: 0 0 0.75rem;
+}
+
+.panel label {
+  display: block;
+  font-size: 0.75rem;
+  color: #9bb0d0;
+  margin-top: 0.65rem;
+}
+
+.panel input {
+  width: 100%;
+  margin-top: 0.25rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  border: 1px solid #2c3b5c;
+  background: #0b1020;
+  color: inherit;
+}
+
+.panel button {
+  margin-top: 0.9rem;
+  width: 100%;
+  padding: 0.55rem 0.75rem;
+  border: 0;
+  border-radius: 8px;
+  background: #3b82f6;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.panel button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.status {
+  margin-top: 0.85rem;
+  font-size: 0.8rem;
+  color: #9bb0d0;
+}
+
+.list {
+  margin-top: 1rem;
+  max-height: 45vh;
+  overflow: auto;
+  font-size: 0.8rem;
+}
+
+.list div {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid #1c2740;
+}
+
+.map {
+  position: relative;
+  background:
+    linear-gradient(#1a243a 1px, transparent 1px) 0 0 / 40px 40px,
+    linear-gradient(90deg, #1a243a 1px, transparent 1px) 0 0 / 40px 40px,
+    #0d1424;
+}
+
+.dot {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.25);
+  transition: left 0.2s linear, top 0.2s linear;
+}
+
+.dot.busy {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.25);
+}
+
+.tooltip {
+  position: absolute;
+  left: 16px;
+  top: -22px;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #dbe7ff;
+}

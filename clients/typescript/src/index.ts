@@ -42,6 +42,10 @@ export type IngestResult = {
 export type ClientOptions = {
   /** Shared secret for `/v1/*` when the server has `SUBSTATE_API_KEY` set. */
   apiKey?: string;
+  /** Auto-reconnect with resume after disconnect (default true). */
+  autoReconnect?: boolean;
+  /** Delay before reconnect attempt in ms (default 1000). */
+  reconnectDelayMs?: number;
 };
 
 function authHeaders(apiKey?: string): Record<string, string> {
@@ -54,16 +58,29 @@ function authHeaders(apiKey?: string): Record<string, string> {
   };
 }
 
+type TrackedSub = {
+  entityType: string;
+  where: Record<string, unknown>;
+  lastSeq: number;
+};
+
 export class SubStateClient {
   readonly url: string;
   readonly apiKey?: string;
   private ws: WebSocket | null = null;
   private handlers = new Set<MessageHandler>();
   private openPromise: Promise<void> | null = null;
+  private autoReconnect: boolean;
+  private reconnectDelayMs: number;
+  private intentionalClose = false;
+  private tracked = new Map<string, TrackedSub>();
+  private pendingByFilter = new Map<string, TrackedSub>();
 
   constructor(url: string, options: ClientOptions = {}) {
     this.url = url;
     this.apiKey = options.apiKey;
+    this.autoReconnect = options.autoReconnect !== false;
+    this.reconnectDelayMs = options.reconnectDelayMs ?? 1000;
   }
 
   onMessage(handler: MessageHandler): () => void {
@@ -74,6 +91,7 @@ export class SubStateClient {
   }
 
   async connect(): Promise<void> {
+    this.intentionalClose = false;
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return;
     }
@@ -100,6 +118,7 @@ export class SubStateClient {
         } catch {
           return;
         }
+        this.noteServerMessage(message);
         for (const handler of this.handlers) {
           handler(message);
         }
@@ -107,13 +126,72 @@ export class SubStateClient {
       ws.on("close", () => {
         this.ws = null;
         this.openPromise = null;
+        if (!this.intentionalClose && this.autoReconnect) {
+          setTimeout(() => {
+            void this.reconnectAndResume();
+          }, this.reconnectDelayMs);
+        }
       });
     });
 
     return this.openPromise;
   }
 
+  private async reconnectAndResume(): Promise<void> {
+    try {
+      await this.connect();
+      for (const [subId, tracked] of this.tracked) {
+        if (tracked.lastSeq > 0) {
+          this.resume(subId, tracked.lastSeq);
+        } else {
+          this.subscribe(tracked.entityType, tracked.where);
+        }
+      }
+      for (const tracked of this.pendingByFilter.values()) {
+        this.subscribe(tracked.entityType, tracked.where);
+      }
+    } catch {
+      if (!this.intentionalClose && this.autoReconnect) {
+        setTimeout(() => {
+          void this.reconnectAndResume();
+        }, this.reconnectDelayMs);
+      }
+    }
+  }
+
+  private noteServerMessage(message: ServerMessage): void {
+    if (message.type === "subscribed") {
+      // Match the most recent pending subscribe for this connection.
+      const pending = [...this.pendingByFilter.values()].pop();
+      if (pending) {
+        this.tracked.set(message.subscription, {
+          ...pending,
+          lastSeq: 0,
+        });
+      }
+    }
+    if (message.type === "delta") {
+      const tracked = this.tracked.get(message.subscription);
+      if (tracked) {
+        tracked.lastSeq = Math.max(tracked.lastSeq, message.seq);
+      }
+    }
+    if (message.type === "snapshot") {
+      const tracked = this.tracked.get(message.subscription);
+      if (tracked && tracked.lastSeq === 0) {
+        // Keep lastSeq; snapshot has no seq.
+      }
+    }
+    if (message.type === "reset") {
+      const tracked = this.tracked.get(message.subscription);
+      if (tracked) {
+        tracked.lastSeq = 0;
+      }
+    }
+  }
+
   close(): void {
+    this.intentionalClose = true;
     this.ws?.close();
     this.ws = null;
     this.openPromise = null;
@@ -127,6 +205,8 @@ export class SubStateClient {
   }
 
   subscribe(entityType: string, where: Record<string, unknown> = {}): void {
+    const key = `${entityType}:${JSON.stringify(where)}`;
+    this.pendingByFilter.set(key, { entityType, where, lastSeq: 0 });
     this.send({
       type: "subscribe",
       entity_type: entityType,
@@ -151,11 +231,17 @@ export class SubStateClient {
   }
 
   unsubscribe(subscription: string): void {
+    this.tracked.delete(subscription);
     this.send({ type: "unsubscribe", subscription });
   }
 
   ack(subscription: string, seq: number): void {
     this.send({ type: "ack", subscription, seq });
+  }
+
+  /** Highest applied seq per subscription (for resume helpers). */
+  lastSeq(subscription: string): number {
+    return this.tracked.get(subscription)?.lastSeq ?? 0;
   }
 
   /** Wait for the next server message matching `predicate`, with timeout. */

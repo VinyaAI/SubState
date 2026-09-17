@@ -212,6 +212,14 @@ cd clients/typescript && npm install && npm run build
 
 See [clients/typescript/README.md](clients/typescript/README.md).
 
+### Reference dispatcher map
+
+```bash
+cd examples/dispatcher-map && npm install && npm run dev
+```
+
+See [examples/dispatcher-map/README.md](examples/dispatcher-map/README.md).
+
 ### Debug shell
 
 Interactive REPL with the same engine boot (needs Rust + `.env`):
