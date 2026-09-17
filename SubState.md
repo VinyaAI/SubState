@@ -160,8 +160,9 @@ never guesses merge behavior at runtime.
 Discover structure automatically. Infer cautiously. Confirm authority,
 identity, and field modes before `serve`.
 
-Later work (not in this prototype): Schema Registry / Avro, field
-remapping, merge-into-existing schemas.
+Field remapping (`column` / `path`), merge-into-existing `init`, `ttl_ms`,
+and one-hop relations are implemented. Later work (not in this prototype):
+Schema Registry / Avro / Protobuf.
 
 6. Source Authority and Versions
 
@@ -379,15 +380,17 @@ fresh snapshot
 For latest-value state, a fresh snapshot contains the newest known value
 rather than every intermediate value missed.
 
-15. Acknowledgements
+15. Acknowledgements and backpressure
 
 Clients acknowledge the highest subscription sequence they have
 successfully applied.
 
-For the prototype, acknowledgements only advance the known resume point.
-They do not slow or pause delivery.
+Acknowledgements only advance the known resume point. They do not form a
+credit window and do not slow or pause delivery by themselves.
 
-Backpressure is intentionally deferred.
+When the WebSocket send buffer backs up, SubState stops broadcasting live
+deltas to that session. On recovery it sends `reset` plus a fresh snapshot
+from the CDS (same shape as an out-of-window resume).
 
 16. Prototype Architecture
 
@@ -491,11 +494,12 @@ not part of the first prototype.
 
 Important deferred questions include:
 
-Persistence --- Which CDS, subscription, User State, and
-delta-history data must survive an engine restart?
+Persistence beyond the local disk snapshot --- How should CDS /
+subscription / history durability work across machines?
 
-Backpressure --- What happens when a user consumes updates more
-slowly than SubState produces them?
+Ack-as-credit backpressure --- Acknowledgements still only advance the
+resume cursor; send-buffer backup already triggers pause + reset +
+snapshot, but there is no client credit window yet.
 
 Cross-source ordering --- What guarantees should a user receive when
 independent sources change different fields?

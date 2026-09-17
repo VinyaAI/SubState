@@ -12,9 +12,10 @@ pub use heuristics::{
     propose_ordering, singularize, source_id_from_topic, table_is_eligible,
 };
 pub use propose::{
-    attach_http_source, attach_kafka_to_entity, build_schema, default_entity_name,
-    entity_from_postgres_table, kafka_only_entity, merge_schemas, propose_kafka_attach,
-    ConflictPolicy, EntityDraft, FieldDraft, KafkaAttachDraft, SourceDraft,
+    attach_http_source, attach_kafka_to_entity, attach_postgres_relations, build_schema,
+    default_entity_name, entity_from_postgres_table, kafka_only_entity, merge_schemas,
+    propose_kafka_attach, ConflictPolicy, EntityDraft, FieldDraft, KafkaAttachDraft, SourceDraft,
+    DEFAULT_LATEST_VALUE_TTL_MS,
 };
 
 use anyhow::Result;

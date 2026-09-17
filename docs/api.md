@@ -92,6 +92,10 @@ Server replies: `subscribed`, then `snapshot`, then `delta` (`add` / `update` /
 `remove`). Other client messages: `resume` (with `resume_after` seq),
 `unsubscribe`, `ack`.
 
+**Resume window:** each subscription retains about the last **500** delivered
+deltas. If `resume_after` is older than that ring, the server sends `reset` and
+a fresh CDS snapshot (not a full historical replay).
+
 If the WebSocket send buffer backs up, the server stops broadcasting to that
 session and sends `reset` plus a fresh snapshot on recovery. `ack` advances the
 resume cursor; it is not a credit window yet.

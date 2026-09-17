@@ -13,8 +13,18 @@ cargo run -p substate-cli -- init --defaults --out ./schema.yaml
 ```
 
 `init` merges into an existing file when one is present (adds/updates drafts;
-does not wipe unrelated hand-edits). You can also start from
-[schema.template.yaml](../schema.template.yaml).
+does not wipe unrelated hand-edits). Generated drafts may also include:
+
+- `ttl_ms: 5000` on GPS-like `latest_value` fields (`location`, `lat`, …)
+- one-hop `relations` from **single-column** Postgres foreign keys when both
+  tables are selected as entities
+
+`column` / `path` remaps are supported by the runtime and template; `init`
+leaves names 1:1 unless you hand-edit. Discovery may print inferred JSON/SQL
+types in the console — they are **not** written into the YAML (`FieldDef` has
+no `type` key). Nested objects (e.g. `location: { lat, lng }`) stay one field.
+
+You can also start from [schema.template.yaml](../schema.template.yaml).
 
 ## Shape
 

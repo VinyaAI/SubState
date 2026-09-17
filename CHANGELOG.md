@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/) once
 stable. Until then, the product is **`0.1.0-alpha`**: **`/v1` may break**
 between commits without a major version bump.
 
+## [Unreleased]
+
+### Changed
+
+- Docs spell out the ~500-delta resume window and shipped WS backpressure
+  (`reset` + snapshot); `ack` remains resume-cursor only, not a credit window
+- `substate init` emits `ttl_ms: 5000` on GPS-like `latest_value` fields and
+  one-hop `relations` from single-column Postgres FKs when both tables are
+  selected as entities
+
 ## [0.1.0-alpha] — 2026-09-17
 
 First public alpha of the local SubState sidecar.

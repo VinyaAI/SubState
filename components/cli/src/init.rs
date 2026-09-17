@@ -6,9 +6,10 @@ use anyhow::{bail, Context, Result};
 use kafka_source::{discover_topics, TopicSample};
 use postgres_source::{load_catalog, PostgresCatalog, TableInfo};
 use schema_gen::{
-    attach_http_source, attach_kafka_to_entity, build_schema, default_entity_name,
-    entity_from_postgres_table, kafka_only_entity, propose_attach_entity, propose_entity_key,
-    propose_kafka_attach, schema_to_yaml, table_is_eligible, ConflictPolicy, EntityDraft,
+    attach_http_source, attach_kafka_to_entity, attach_postgres_relations, build_schema,
+    default_entity_name, entity_from_postgres_table, kafka_only_entity, propose_attach_entity,
+    propose_entity_key, propose_kafka_attach, schema_to_yaml, table_is_eligible, ConflictPolicy,
+    EntityDraft,
 };
 use std::env;
 use std::io::{self, Write};
@@ -209,11 +210,13 @@ async fn run_with_prompter(
 
     let mut entities: Vec<EntityDraft> = Vec::new();
     let mut skipped_tables: Vec<String> = Vec::new();
+    let mut postgres_tables: Vec<TableInfo> = Vec::new();
 
     if let Some(url) = database_url {
         println!("Scanning Postgres ({pg_schema})...");
         let pool = postgres_source::connect(url).await?;
         let catalog = load_catalog(&pool, pg_schema).await?;
+        postgres_tables = catalog.tables.clone();
         let (drafts, skipped) = select_postgres_entities(prompter, &catalog)?;
         entities.extend(drafts);
         skipped_tables = skipped;
@@ -243,6 +246,10 @@ async fn run_with_prompter(
         for entity in &mut entities {
             attach_http_source(entity, "http");
         }
+    }
+
+    if !postgres_tables.is_empty() {
+        attach_postgres_relations(&mut entities, &postgres_tables);
     }
 
     let mut schema = build_schema(entities).context("generated schema failed validation")?;

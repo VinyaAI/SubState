@@ -142,6 +142,7 @@ and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
 | Kafka JSON + Debezium unwrap; HTTP ingest | Full Schema Registry / Avro pipeline |
 | Disk snapshot of CDS + resume history | Clustering / HA |
 | Range + `$or` / `$and` filters | Spatial indexes; multi-hop joins |
+| ~500 deltas per subscription, then reset + snapshot | Unlimited / durable resume |
 | WS backpressure → `reset` + snapshot | Ack-as-credit window |
 | Shared-secret `SUBSTATE_API_KEY` | SSO / SCIM / multi-tenant cloud |
 | Single process sidecar | Hosted control plane, SOC 2, private link |
