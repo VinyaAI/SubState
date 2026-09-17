@@ -13,17 +13,23 @@
 entities:
   <entity>:                          # clients subscribe / ingest this name
     identity:
-      field: <id_field>              # must also be a key under fields
+      field: <id_field>              # or: fields: [<a>, <b>] for composite PK
     sources:
       <pg_source>:                   # nickname; does not have to be "postgres"
-        type: postgres               # enum: postgres | kafka | http
-        table: <postgres_table>      # physical table
+        type: postgres               # postgres | kafka | http | mysql | mongodb
+        table: <postgres_table>      # physical table / collection
       <stream_source>:
         type: kafka
         topic: <kafka_topic>
         entity_key: <payload_id>     # field on the Kafka message
       <http_source>:
         type: http
+      # <mysql_source>:
+      #   type: mysql
+      #   table: <mysql_table>
+      # <mongo_source>:
+      #   type: mongodb
+      #   table: <collection>
     fields:
       <id_field>:
         source: <pg_source>          # must match a key under sources

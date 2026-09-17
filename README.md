@@ -1,16 +1,21 @@
 # SubState
 
-**Early prototype.** SubState sits next to your systems, keeps a live in-memory
-copy of the entities you care about, and pushes changes to apps over WebSocket.
+**0.1.0-alpha** — Apache-2.0. SubState sits next to your systems, keeps a live
+in-memory copy of the entities you care about, and pushes changes to apps over
+WebSocket.
 
-Think: subscribe to a filtered live view of your data and get updates when it
-changes — without your app polling the database itself.
+Subscribe to a filtered live view of your data and get updates when it changes —
+without your app polling the database itself.
+
+> **`/v1` may break** in alpha. Pin a commit for anything beyond local
+> experiments. See [CHANGELOG.md](CHANGELOG.md) and [docs/api.md](docs/api.md).
 
 | I want… | Do this |
 | --- | --- |
-| Run against my database | [Connect your Postgres](#connect-your-postgres) |
-| Understand the schema | [Schema](#schema) |
-| Understand the full design | [SubState.md](SubState.md) |
+| Get running | [Quickstart](#quickstart) |
+| Write / understand schema | [docs/schema.md](docs/schema.md) |
+| Call HTTP / WebSocket | [docs/api.md](docs/api.md) |
+| Understand the design | [SubState.md](SubState.md) |
 
 ## What is this?
 
@@ -19,22 +24,21 @@ different live subsets of that data.
 
 SubState:
 
-1. Snapshots selected Postgres tables, then follows changes (logical CDC when
-   `wal_level=logical`, otherwise a table poll)
+1. Snapshots selected tables (Postgres / MySQL / Mongo), then follows changes
+   (Postgres logical CDC when available, otherwise poll)
 2. Merges extra fields from Kafka topics or `POST /v1/ingest`
 3. Lets clients subscribe over WebSocket and receive a snapshot, then small
    change messages (deltas)
 
 It is **not** a database and not a hosted cloud service. Sources speak one inbox
-(`SourceUpdate`); the CDS merges. This repo is a working local prototype.
+(`SourceUpdate`); the CDS merges. Run it as a local sidecar.
 
-## Core ideas (simple)
+## Core ideas
 
 ```mermaid
 flowchart LR
-  pg[Your_Postgres] --> cds[Memory_state_CDS]
-  kafka[Kafka_topic] --> cds
-  ingest[HTTP_ingest] --> cds
+  pg[Your_sources] --> cds[Memory_state_CDS]
+  kafka[Kafka_or_HTTP] --> cds
   cds --> idx[Who_cares]
   idx --> us[Per_subscriber_view]
   us --> deltas[Deltas]
@@ -43,168 +47,67 @@ flowchart LR
 
 | Term | Plain meaning |
 | --- | --- |
-| **CDS** | SubState’s in-memory “what’s true now” for your entities |
-| **Schema** | A YAML file that maps Postgres tables/columns → logical names clients use |
+| **CDS** | In-memory “what’s true now” for your entities |
+| **Schema** | YAML that maps physical tables/columns → logical names |
 | **Subscribe** | Ask for a filtered live view over WebSocket |
-| **Ingest** | Push any source-owned fields with `POST /v1/ingest` (universal fallback) |
+| **Ingest** | Push source-owned fields with `POST /v1/ingest` |
 | **Delta** | A small change: `add`, `update`, or `remove` |
 
-Important: subscriptions query SubState’s memory (CDS), **not** Postgres
-directly. That avoids races and keeps reconnects off your production database.
+Subscriptions query SubState’s memory (CDS), **not** the database directly.
 
-## Connect your Postgres
+## Quickstart
 
-You’ll need [Rust](https://rustup.rs/), a Postgres URL you control, and a schema
-that matches your columns.
+You’ll need [Rust](https://rustup.rs/) and a database URL you control.
 
 ```bash
 cp components/cli/.env.example .env
 # Edit .env:
 #   DATABASE_URL=postgresql://user:password@localhost:5432/mydb
 #   SCHEMA_PATH=./schema.yaml
-#   KAFKA_BROKERS=localhost:9092   # optional
 
-# Interactive: scan Postgres/Kafka and write schema.yaml
+# Scan sources and write schema.yaml
 cargo run -p substate-cli -- init
 # Or accept all proposals:
 # cargo run -p substate-cli -- init --defaults
 
 cargo run -p substate-cli -- serve
 curl http://127.0.0.1:8080/health
+# {"status":"ok"}
 ```
 
 | Env | Meaning |
 | --- | --- |
-| `DATABASE_URL` | Required for Postgres sources / `init` scan |
-| `SCHEMA_PATH` | **Required for serve/shell.** Path to sync schema YAML |
+| `DATABASE_URL` | Postgres URL for sources / `init` scan |
+| `SCHEMA_PATH` | **Required for serve/shell** |
 | `CDS_SCHEMA` | Postgres schema to read (default: `public`) |
-| `CDS_POLL_MS` | Poll interval if CDC is unavailable (default: `2000`) |
+| `CDS_POLL_MS` | Poll interval if CDC unavailable (default: `2000`) |
 | `POSTGRES_FOLLOW` | `auto` (default), `cdc`, or `poll` |
-| `KAFKA_BROKERS` | Required when the schema has a `kafka` source (also used by `init`) |
+| `KAFKA_BROKERS` | When the schema has a `kafka` source |
+| `MYSQL_URL` / `MONGO_URL` | When the schema has `mysql` / `mongodb` sources |
 | `BIND_ADDR` | Listen address (default: `127.0.0.1:8080`) |
 | `SUBSTATE_API_KEY` | Optional shared secret for `/v1/*` |
 
-`POSTGRES_FOLLOW=auto` tries logical decoding (`pgoutput` slot `substate`) and
-falls back to a full-table poll if `wal_level` is not `logical`.
-
 More options: [components/cli/.env.example](components/cli/.env.example).
 
-## Schema
+Schema details: [docs/schema.md](docs/schema.md). API details: [docs/api.md](docs/api.md).
 
-Clients subscribe and ingest by **logical name** (the entity key you choose),
-never by the physical table name.
+## HTTP / WebSocket (summary)
 
-**Preferred:** generate a starting schema from your sources:
-
-```bash
-cargo run -p substate-cli -- init
-# cargo run -p substate-cli -- init --defaults --out ./schema.yaml
-```
-
-`substate init` scans Postgres (`DATABASE_URL` / `CDS_SCHEMA`) and optionally
-Kafka (`KAFKA_BROKERS`), asks only for mapping/semantics, and writes a sorted
-YAML file the engine can load. Review the file before `serve`.
-
-You can still hand-write from [schema.template.yaml](schema.template.yaml)
-(blank skeleton with placeholders). Bare keys (`entities`, `identity`, `type`,
-`mode`, …) are required vocabulary. Names you choose must match everywhere they
-are referenced (`identity.field` ↔ `fields`, `fields.*.source` ↔ `sources`).
-
-```yaml
-entities:
-  <entity>:                          # name clients use
-    identity:
-      field: <id_field>              # must also be a key under fields
-    sources:
-      <pg_source>:                   # nickname; does not have to be "postgres"
-        type: postgres               # enum: postgres | kafka | http
-        table: <postgres_table>      # physical table name
-      <stream_source>:
-        type: kafka
-        topic: <kafka_topic>
-        entity_key: <payload_id>
-      <http_source>:
-        type: http
-    fields:
-      <id_field>:
-        source: <pg_source>
-        mode: transactional          # enum: transactional | latest_value
-      <field>:
-        source: <pg_source>
-        mode: transactional
-      <live_field>:
-        source: <stream_source>
-        mode: latest_value
-        ordering: <ordering_field>
-```
-
-Rules in short:
-
-- Identity field must be listed under `fields`
-- Each field’s `source` must exist under `sources`
-- Postgres tables need a primary key, or that entity is skipped
-- Only fields owned by a `postgres` source are loaded from the table
-- Kafka/HTTP fields appear when a message or ingest arrives and are lost if
-  SubState restarts
-- Supported source types: `postgres`, `kafka`, `http`
-
-## HTTP / WebSocket
-
-Four endpoints. For local work, bind to localhost. When `SUBSTATE_API_KEY` is
-set, `/v1/*` requires `Authorization: Bearer <key>` or `x-api-key`. `/health`
-stays open. With no key set, `/v1/*` is open (local-dev only; a warning is
-logged).
-
-### Health
+When `SUBSTATE_API_KEY` is set, `/v1/*` requires `Authorization: Bearer` or
+`x-api-key`. `/health` stays open.
 
 ```bash
 curl http://127.0.0.1:8080/health
-# {"status":"ok"}
-```
-
-### Current state (CDS)
-
-```bash
 curl http://127.0.0.1:8080/v1/cds
-curl http://127.0.0.1:8080/v1/cds/<entity>
-curl http://127.0.0.1:8080/v1/cds/<entity>/1
+curl -s http://127.0.0.1:8080/v1/ingest -H 'content-type: application/json' -d '{...}'
+# WebSocket: ws://127.0.0.1:8080/v1/sync
 ```
 
-`GET /v1/cds` is the merged snapshot (Postgres + Kafka/HTTP fields). Add `?limit=50`
-(default 20, max 100) to change how many rows per entity type are included.
-
-### Ingest (HTTP)
-
-Push fields owned by the named source (usually your `http` source id):
-
-```bash
-curl -s http://127.0.0.1:8080/v1/ingest \
-  -H 'content-type: application/json' \
-  -d '{
-    "source": "<http_source>",
-    "entity_type": "<entity>",
-    "id": "1",
-    "fields": { "<live_field>": { "lat": 36.16, "lng": -86.78 } },
-    "versions": { "<live_field>": 1 }
-  }'
-```
-
-### Sync (WebSocket)
-
-Connect to `ws://127.0.0.1:8080/v1/sync`, then send:
-
-```json
-{ "type": "subscribe", "entity_type": "<entity>", "where": { "<field>": "value" } }
-```
-
-You’ll get `subscribed`, then a `snapshot`, then `delta` messages as data
-changes. Other client messages: `resume`, `unsubscribe`, `ack`.
+Full message shapes and filter grammar: [docs/api.md](docs/api.md).
 
 ## Optional extras
 
 ### TypeScript client
-
-Local package (build it yourself):
 
 ```bash
 cd clients/typescript && npm install && npm run build
@@ -222,39 +125,36 @@ See [examples/dispatcher-map/README.md](examples/dispatcher-map/README.md).
 
 ### Debug shell
 
-Interactive REPL with the same engine boot (needs Rust + `.env`):
-
 ```bash
 cargo run -p substate-cli -- shell
 ```
 
-Try `help`, `tables`, `show <entity>`, `subscribe <entity> <field>=value`.
-
 ### Docker image
 
-[Dockerfile](Dockerfile) builds the `substate` sidecar binary. Mount your own
-schema and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
+[Dockerfile](Dockerfile) builds the `substate` sidecar binary. Mount your schema
+and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
 
 ## Known limits
 
-This is a prototype — good for learning and local experiments, not production.
-
-| Today | Not yet |
+| Today | Not in this OSS tree |
 | --- | --- |
-| Postgres snapshot + CDC (`pgoutput`) or poll fallback | MySQL / Mongo / Oracle adapters |
-| Kafka JSON consumer + HTTP ingest | Schema Registry / Avro / Debezium envelope |
-| `substate init` schema discovery | Merge-into-existing schema; field remapping |
-| In-memory CDS, subscriptions, history | Persistence across restart |
-| Equality `where` (AND only) | Ranges, spatial filters, OR, joins |
-| Last 500 deltas per subscription; then reset | Durable / unlimited resume history |
-| Ack does not pause delivery | Backpressure |
-| No auth unless `SUBSTATE_API_KEY` | SSO / multi-tenant |
-| Single process | Clustering / scale-out |
+| Postgres / MySQL / Mongo poll; Postgres CDC | Oracle; Redis / MQTT |
+| Kafka JSON + Debezium unwrap; HTTP ingest | Full Schema Registry / Avro pipeline |
+| Disk snapshot of CDS + resume history | Clustering / HA |
+| Range + `$or` / `$and` filters | Spatial indexes; multi-hop joins |
+| WS backpressure → `reset` + snapshot | Ack-as-credit window |
+| Shared-secret `SUBSTATE_API_KEY` | SSO / SCIM / multi-tenant cloud |
+| Single process sidecar | Hosted control plane, SOC 2, private link |
 
-HTTP-owned fields and resume history do not survive a restart. Postgres fields
-are loaded again on boot.
+## Contributing & security
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [LICENSE](LICENSE) (Apache-2.0)
+- [CHANGELOG.md](CHANGELOG.md)
 
 ## Learn more
 
 - [SubState.md](SubState.md) — architecture and long-term vision
-- [clients/typescript/README.md](clients/typescript/README.md) — local TS client
+- [docs/schema.md](docs/schema.md) — sync schema reference
+- [docs/api.md](docs/api.md) — `/v1` surface and stability notes
