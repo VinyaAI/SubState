@@ -1,39 +1,24 @@
 # SubState
 
-**0.1.0-alpha** — Apache-2.0. SubState sits next to your systems, keeps a live
-in-memory copy of the entities you care about, and pushes changes to apps over
-WebSocket.
+SubState is an open-source, streaming API and real-time database. It's built
+for apps where the data is constantly changing, but each user only needs
+updates to what they subscribed to (e.g., Uber, Robinhood, FedEx, DraftKings,
+etc). Instead of polling the database and pushing a different set of changes
+to every user, SubState keeps a live database and syncs each subscription as
+the data changes.
 
-Subscribe to a filtered live view of your data and get updates when it changes —
-without your app polling the database itself.
+**0.1.0-alpha** — Apache-2.0.
 
-> **`/v1` may break** in alpha. Pin a commit for anything beyond local
-> experiments. See [CHANGELOG.md](CHANGELOG.md) and [docs/api.md](docs/api.md).
+## Contents
+- [Architecture of SubState](#architecture-of-substate)
+- [Quickstart](#quickstart)
+- [HTTP / WebSocket](#http--websocket-summary)
+- [Optional extras](#optional-extras)
+- [Known limits](#known-limits)
+- [Contributing](#contributing--security)
+- [Learn more](#learn-more)
 
-| I want… | Do this |
-| --- | --- |
-| Get running | [Quickstart](#quickstart) |
-| Write / understand schema | [docs/schema.md](docs/schema.md) |
-| Call HTTP / WebSocket | [docs/api.md](docs/api.md) |
-| Understand the design | [SubState.md](SubState.md) |
-
-## What is this?
-
-Companies often have data in Postgres (and other places). Different users need
-different live subsets of that data.
-
-SubState:
-
-1. Snapshots selected tables (Postgres / MySQL / Mongo), then follows changes
-   (Postgres logical CDC when available, otherwise poll)
-2. Merges extra fields from Kafka topics or `POST /v1/ingest`
-3. Lets clients subscribe over WebSocket and receive a snapshot, then small
-   change messages (deltas)
-
-It is **not** a database and not a hosted cloud service. Sources speak one inbox
-(`SourceUpdate`); the CDS merges. Run it as a local sidecar.
-
-## Core ideas
+## Architecture of SubState
 
 ```mermaid
 flowchart LR
@@ -45,32 +30,134 @@ flowchart LR
   deltas --> ws[App_WebSocket]
 ```
 
-| Term | Plain meaning |
-| --- | --- |
-| **CDS** | In-memory “what’s true now” for your entities |
-| **Schema** | YAML that maps physical tables/columns → logical names |
-| **Subscribe** | Ask for a filtered live view over WebSocket |
-| **Ingest** | Push source-owned fields with `POST /v1/ingest` |
-| **Delta** | A small change: `add`, `update`, or `remove` |
+SubState can be divided into 3 separate parts.
 
-Subscriptions query SubState’s memory (CDS), **not** the database directly.
+### 1. CDS (Current Database State)
+
+The CDS is an in-memory copy of your data. SubState pulls from all of your
+data sources and merges them into one central reference copy.
+
+For example, a `driver` record might get `name` and `status` from Postgres,
+and `location` from a Kafka topic:
+
+```text
+driver {
+  id:       "728"
+  name:     "Alice"              // Postgres
+  status:   "available"          // Postgres
+  location: { lat: 36.16, lng: -86.78 }  // Kafka
+}
+```
+
+When a source changes, that copy is updated. The rest of SubState reads the
+CDS when it needs data that is current, instead of re-querying your data
+sources.
+
+SubState includes connectors for Postgres, MySQL, and Mongo but you can also
+send data into the CDS through Kafka or HTTP.
+
+### 2. Subscription Index
+
+A subscription is a request from a user for a specific set of records, and
+for updates whenever that set changes. For example, if you call an Uber,
+your request might look like:
+
+```text
+{
+  type: "driver",
+  where: { region: "chicago", model: "XL", pickup: "priority", status: "available" }
+}
+```
+
+Here, the user wants every driver whose region is Chicago, model size is XL,
+pickup is immediate and whose status is available. The user also wants to be
+told when that set changes (e.g., new drivers become available, a driver
+goes out of range, a driver accepts a different ride, etc). In SubState,
+this query runs against the CDS, not against your database.
+
+The Subscription Index keeps track of every open subscription that a user
+has. When any record in the CDS changes (e.g., new driver becomes
+available), SubState uses this list to find which subscriptions needs to be
+updated.
+
+For example, if the CDS updates `driver:728` in Chicago, the index looks at
+who has subscribed to drivers in Chicago so they can update the change.
+Once the user has finished, they can unsubscribe and the Subscription Index
+will be updated.
+
+### 3. User State
+
+User State is the mirror image of what data the user currently has.
+
+When a user subscribes, SubState builds the requested data set from the CDS
+and sends it to the user (via WebSocket) as a snapshot. After that, any new
+changes (only the updates) are sent to the user via small messages (deltas).
+
+Deltas will be of three states:
+
+- `add` — a record entered the set
+- `update` — a record in the set changed
+- `remove` — a record left the set
+
+For example, the user looking for Uber drivers in Chicago will be sent this
+as their initial User State:
+
+```text
+user_state {
+  driver:12, model: X;
+  driver:31, model: XL;
+  driver:57, model: XL;
+}
+```
+
+If `driver:31` accepts a different ride, then they no longer match the
+query. The socket will remove `driver:31`. So the User State becomes:
+
+```text
+user_state {
+  driver:12, model: X
+  driver:57, model: XL
+}
+```
+
+If a new available driver appears in Chicago, they are added. A user
+searching in New York is not sent these messages.
 
 ## Quickstart
 
-You’ll need [Rust](https://rustup.rs/) and a database URL you control.
+You’ll need [Rust](https://rustup.rs/) and a Postgres URL you control.
+This path uses Postgres. Kafka, HTTP ingest, MySQL, and Mongo are optional;
+see [Architecture](#architecture-of-substate).
+
+1. Copy the env file and set `DATABASE_URL` and `SCHEMA_PATH`:
 
 ```bash
 cp components/cli/.env.example .env
-# Edit .env:
-#   DATABASE_URL=postgresql://user:password@localhost:5432/mydb
-#   SCHEMA_PATH=./schema.yaml
+```
 
-# Scan sources and write schema.yaml
+```bash
+# .env
+DATABASE_URL=postgresql://user:password@localhost:5432/mydb
+SCHEMA_PATH=./schema.yaml
+```
+
+2. Scan sources and write `schema.yaml` (or use `--defaults` to accept all
+   proposals):
+
+```bash
 cargo run -p substate-cli -- init
-# Or accept all proposals:
 # cargo run -p substate-cli -- init --defaults
+```
 
+3. Start SubState:
+
+```bash
 cargo run -p substate-cli -- serve
+```
+
+4. Check that it is up:
+
+```bash
 curl http://127.0.0.1:8080/health
 # {"status":"ok"}
 ```
@@ -115,6 +202,9 @@ curl -s http://127.0.0.1:8080/v1/ingest -H 'content-type: application/json' -d '
 # WebSocket: ws://127.0.0.1:8080/v1/sync
 ```
 
+Subscribe on `ws://127.0.0.1:8080/v1/sync`. The client gets a snapshot,
+then deltas (`add`, `update`, `remove`).
+
 Full message shapes and filter grammar: [docs/api.md](docs/api.md).
 
 ## Optional extras
@@ -128,6 +218,8 @@ cd clients/typescript && npm install && npm run build
 See [clients/typescript/README.md](clients/typescript/README.md).
 
 ### Reference dispatcher map
+
+A live map of the Architecture example (drivers, filters, snapshot + deltas).
 
 ```bash
 cd examples/dispatcher-map && npm install && npm run dev
@@ -143,7 +235,7 @@ cargo run -p substate-cli -- shell
 
 ### Docker image
 
-[Dockerfile](Dockerfile) builds the `substate` sidecar binary. Mount your schema
+[Dockerfile](Dockerfile) builds the `substate` binary. Mount your schema
 and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
 
 ## Known limits
@@ -168,6 +260,6 @@ and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
 
 ## Learn more
 
-- [SubState.md](SubState.md) — architecture and long-term vision
+- [SubState.md](SubState.md) — long-term vision and design notes
 - [docs/schema.md](docs/schema.md) — sync schema reference
 - [docs/api.md](docs/api.md) — `/v1` surface and stability notes
