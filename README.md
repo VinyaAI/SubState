@@ -24,6 +24,8 @@ SubState can be divided into 3 separate parts.
 
 ### 1. CDS (Current Database State)
 
+![Current Database State](images/CDS.png)
+
 The CDS is an in-memory copy of your data. SubState pulls from all of your
 data sources and merges them into one central reference copy.
 
