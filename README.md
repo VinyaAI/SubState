@@ -7,14 +7,7 @@ etc). Instead of polling the database and pushing a different set of changes
 to every user, SubState keeps a live database and syncs each subscription as
 the data changes.
 
-```mermaid
-flowchart LR
-  sources[Sources]
-  substate[SubState]
-  subscribers[Subscribers]
-  sources -->|"tables, streams, ingest"| substate
-  substate -->|"snapshot, then updates"| subscribers
-```
+![Sources to SubState to subscribers](images/SubState_Intro.png)
 
 ## Contents
 - [Architecture of SubState](#architecture-of-substate)
