@@ -29,15 +29,68 @@ SubState can be divided into 3 separate parts.
 The CDS is an in-memory copy of your data. SubState pulls from all of your
 data sources and merges them into one central reference copy.
 
-For example, a `driver` record might get `name` and `status` from Postgres,
-and `location` from a Kafka topic:
+For example, one `driver` record can pull identity and status from Postgres,
+vehicle fields from MySQL, profile fields from Mongo, and live `location`
+from Kafka. The CDS holds every merged record it knows about:
 
 ```text
-driver {
-  id:       "728"
-  name:     "Alice"              // Postgres
-  status:   "available"          // Postgres
-  location: { lat: 36.16, lng: -86.78 }  // Kafka
+cds {
+  driver:12 {
+    id:           "12"
+    name:         "Mei Chen"           // Postgres
+    status:       "available"          // Postgres
+    region:       "chicago"            // Postgres
+    assigned_job: null                 // Postgres
+    model:        "X"                  // MySQL
+    pickup:       "priority"           // MySQL
+    rating:       4.92                 // Mongo
+    vehicle:      { color: "black", plate: "IL-4K91" }  // Mongo
+    location:     { lat: 41.882, lng: -87.629 }  // Kafka
+    heading:      92                   // Kafka
+    speed_mph:    14                   // Kafka
+  }
+  driver:31 {
+    id:           "31"
+    name:         "Jordan Hale"        // Postgres
+    status:       "available"          // Postgres
+    region:       "chicago"            // Postgres
+    assigned_job: null                 // Postgres
+    model:        "XL"                 // MySQL
+    pickup:       "priority"           // MySQL
+    rating:       4.81                 // Mongo
+    vehicle:      { color: "white", plate: "IL-9M22" }  // Mongo
+    location:     { lat: 41.891, lng: -87.620 }  // Kafka
+    heading:      18                   // Kafka
+    speed_mph:    8                    // Kafka
+  }
+  driver:57 {
+    id:           "57"
+    name:         "Sam Okonkwo"        // Postgres
+    status:       "available"          // Postgres
+    region:       "chicago"            // Postgres
+    assigned_job: null                 // Postgres
+    model:        "XL"                 // MySQL
+    pickup:       "priority"           // MySQL
+    rating:       4.88                 // Mongo
+    vehicle:      { color: "gray", plate: "IL-2T14" }  // Mongo
+    location:     { lat: 41.875, lng: -87.641 }  // Kafka
+    heading:      270                  // Kafka
+    speed_mph:    21                   // Kafka
+  }
+  driver:728 {
+    id:           "728"
+    name:         "Alice Nguyen"       // Postgres
+    status:       "busy"               // Postgres
+    region:       "nashville"          // Postgres
+    assigned_job: "job:912"            // Postgres
+    model:        "XL"                 // MySQL
+    pickup:       "standard"           // MySQL
+    rating:       4.95                 // Mongo
+    vehicle:      { color: "blue", plate: "TN-7H03" }  // Mongo
+    location:     { lat: 36.162, lng: -86.781 }  // Kafka
+    heading:      44                   // Kafka
+    speed_mph:    19                   // Kafka
+  }
 }
 ```
 
@@ -67,15 +120,58 @@ told when that set changes (e.g., new drivers become available, a driver
 goes out of range, a driver accepts a different ride, etc). In SubState,
 this query runs against the CDS, not against your database.
 
+![Subscription Index](images/SubscriptionIndex.png)
+
 The Subscription Index keeps track of every open subscription that a user
 has. When any record in the CDS changes (e.g., new driver becomes
 available), SubState uses this list to find which subscriptions needs to be
 updated.
 
-For example, if the CDS updates `driver:728` in Chicago, the index looks at
+For example, if the CDS updates `driver:31` in Chicago, the index looks at
 who has subscribed to drivers in Chicago so they can update the change.
 Once the user has finished, they can unsubscribe and the Subscription Index
 will be updated.
+
+At that moment the index might look like this:
+
+```text
+subscription_index {
+  sub:rider_17 {
+    user:      "alex"
+    type:      "driver"
+    where:     { region: "chicago", model: "XL", pickup: "priority", status: "available" }
+    depends_on: [region, model, pickup, status]
+  }
+  sub:rider_44 {
+    user:      "priya"
+    type:      "driver"
+    where:     { region: "nashville", status: "available" }
+    depends_on: [region, status]
+  }
+  sub:dispatcher_chicago {
+    user:      "ops"
+    type:      "driver"
+    where:     { region: "chicago" }
+    depends_on: [region]
+  }
+}
+```
+
+If `driver:31` (Chicago, XL, available) changes `status` to `busy`:
+
+```text
+CDS change:  driver:31.status  available → busy
+
+selected:
+  sub:rider_17             // query uses status, region, model
+  sub:dispatcher_chicago   // still a Chicago driver; their view may update
+skipped:
+  sub:rider_44             // Nashville only
+```
+
+If only `location` changes on `driver:31`, `sub:rider_17` is skipped — that
+query does not use `location`. `sub:dispatcher_chicago` is skipped for the
+same reason unless its filter also depends on that field.
 
 ### 3. User State
 
