@@ -63,7 +63,7 @@ Inside this crate, pick the file first:
 | Axum routes + WebSocket protocol | `src/ws.rs` |
 | Interactive `cds>` REPL | `src/shell.rs` |
 | `substate init` prompts | `src/init.rs` |
-| Env template | `.env.example` |
+| Env template | repo-root [`.env.example`](../../.env.example) |
 
 ## Layout
 
@@ -72,7 +72,6 @@ One binary crate. Crate name `substate-cli`, binary name `substate`.
 ```
 components/cli/
   Cargo.toml          # crate: substate-cli, bin: substate
-  .env.example
   src/
     main.rs           # clap: init | serve | shell
     config.rs
@@ -109,10 +108,15 @@ Loaded by `boot::load_dotenv()` then `RuntimeConfig::from_env()`.
 Dotenv search order: `DOTENV_PATH`, then `./.env`, then
 `components/cli/.env`. Already-exported shell vars win.
 
+Template: repo-root [`.env.example`](../../.env.example). Copy to `./.env`.
+
 | Env | Required when | Default |
 | --- | --- | --- |
 | `SCHEMA_PATH` | `serve` / `shell` | — |
 | `DATABASE_URL` | schema has a `postgres` source, or `init` scan | — |
+| `MYSQL_URL` | schema has a `mysql` source | — |
+| `MONGO_URL` | schema has a `mongodb` source | — |
+| `MONGO_DATABASE` | optional with `MONGO_URL` | `substate` |
 | `KAFKA_BROKERS` | schema has a `kafka` source, or `init` scan | — |
 | `CDS_SCHEMA` | optional | `public` |
 | `CDS_POLL_MS` | optional | `2000` |

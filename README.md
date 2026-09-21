@@ -7,7 +7,14 @@ etc). Instead of polling the database and pushing a different set of changes
 to every user, SubState keeps a live database and syncs each subscription as
 the data changes.
 
-**0.1.0-alpha** — Apache-2.0.
+```mermaid
+flowchart LR
+  sources[Sources]
+  substate[SubState]
+  subscribers[Subscribers]
+  sources -->|"tables, streams, ingest"| substate
+  substate -->|"snapshot, then updates"| subscribers
+```
 
 ## Contents
 - [Architecture of SubState](#architecture-of-substate)
@@ -19,16 +26,6 @@ the data changes.
 - [Learn more](#learn-more)
 
 ## Architecture of SubState
-
-```mermaid
-flowchart LR
-  pg[Your_sources] --> cds[Memory_state_CDS]
-  kafka[Kafka_or_HTTP] --> cds
-  cds --> idx[Who_cares]
-  idx --> us[Per_subscriber_view]
-  us --> deltas[Deltas]
-  deltas --> ws[App_WebSocket]
-```
 
 SubState can be divided into 3 separate parts.
 
@@ -132,7 +129,7 @@ see [Architecture](#architecture-of-substate).
 1. Copy the env file and set `DATABASE_URL` and `SCHEMA_PATH`:
 
 ```bash
-cp components/cli/.env.example .env
+cp .env.example .env
 ```
 
 ```bash
@@ -141,8 +138,8 @@ DATABASE_URL=postgresql://user:password@localhost:5432/mydb
 SCHEMA_PATH=./schema.yaml
 ```
 
-2. Scan sources and write `schema.yaml` (or use `--defaults` to accept all
-   proposals):
+2. Generate `schema.yaml` from your sources (`--defaults` accepts every
+   proposal without prompting):
 
 ```bash
 cargo run -p substate-cli -- init
@@ -186,9 +183,8 @@ same script.
 | `BIND_ADDR` | Listen address (default: `127.0.0.1:8080`) |
 | `SUBSTATE_API_KEY` | Optional shared secret for `/v1/*` |
 
-More options: [components/cli/.env.example](components/cli/.env.example).
-
-Schema details: [docs/schema.md](docs/schema.md). API details: [docs/api.md](docs/api.md).
+Env template: [.env.example](.env.example). Schema:
+[docs/schema.md](docs/schema.md). API: [docs/api.md](docs/api.md).
 
 ## HTTP / WebSocket (summary)
 
