@@ -29,9 +29,9 @@ SubState can be divided into 3 separate parts.
 The CDS is an in-memory copy of your data. SubState pulls from all of your
 data sources and merges them into one central reference copy.
 
-For example, one `driver` record can pull identity and status from Postgres,
-vehicle fields from MySQL, profile fields from Mongo, and live `location`
-from Kafka. The CDS holds every merged record it knows about:
+Take Uber as an example. One `driver` record can pull identity and status
+from Postgres, vehicle fields from MySQL, profile fields from Mongo, and
+live `location` from Kafka. The CDS is the live map of those drivers:
 
 ```text
 cds {
@@ -77,20 +77,6 @@ cds {
     heading:      270                  // Kafka
     speed_mph:    21                   // Kafka
   }
-  driver:728 {
-    id:           "728"
-    name:         "Alice Nguyen"       // Postgres
-    status:       "busy"               // Postgres
-    region:       "nashville"          // Postgres
-    assigned_job: "job:912"            // Postgres
-    model:        "XL"                 // MySQL
-    pickup:       "standard"           // MySQL
-    rating:       4.95                 // Mongo
-    vehicle:      { color: "blue", plate: "TN-7H03" }  // Mongo
-    location:     { lat: 36.162, lng: -86.781 }  // Kafka
-    heading:      44                   // Kafka
-    speed_mph:    19                   // Kafka
-  }
 }
 ```
 
@@ -127,12 +113,13 @@ has. When any record in the CDS changes (e.g., new driver becomes
 available), SubState uses this list to find which subscriptions needs to be
 updated.
 
-For example, if the CDS updates `driver:31` in Chicago, the index looks at
-who has subscribed to drivers in Chicago so they can update the change.
-Once the user has finished, they can unsubscribe and the Subscription Index
-will be updated.
+Back to Uber: if the CDS updates `driver:31` in Chicago, the index looks
+at who is waiting for a ride (or dispatching) in Chicago so they can get
+that change. Once the rider is matched, they can unsubscribe and the
+Subscription Index will be updated.
 
-At that moment the index might look like this:
+Here is what that Uber index might look like — two riders and one
+dispatcher, each with a different open query:
 
 ```text
 subscription_index {
@@ -174,6 +161,8 @@ query does not use `location`. `sub:dispatcher_chicago` is skipped for the
 same reason unless its filter also depends on that field.
 
 ### 3. User State
+
+![User State](images/User_State.png)
 
 User State is the mirror image of what data the user currently has.
 
