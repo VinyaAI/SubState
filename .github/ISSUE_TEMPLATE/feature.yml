@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a change that fits this OSS tree
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Good fits: engine correctness, schema/adapters, docs, tests, and local UX (`init` / `serve` / `shell`, TS client, examples).
+
+        **Out of scope** for this OSS tree: hosted control plane, SSO/SAML/SCIM, SOC 2 / private link / CMEK, and 24/7 support offerings. See [CONTRIBUTING.md](https://github.com/VinyaAI/SubState/blob/main/CONTRIBUTING.md).
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: How should SubState change? Sketch the API, schema, or UX if you can.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches you thought about (optional).
+    validations:
+      required: false

@@ -330,6 +330,7 @@ and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
 ## Contributing & security
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 - [SECURITY.md](SECURITY.md)
 - [LICENSE](LICENSE) (Apache-2.0)
 - [CHANGELOG.md](CHANGELOG.md)

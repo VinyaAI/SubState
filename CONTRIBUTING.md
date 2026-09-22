@@ -35,6 +35,11 @@ Good fits: engine correctness, schema/adapters, docs, tests, and local UX
 Out of scope for this OSS tree: hosted control plane, SSO/SAML/SCIM, SOC 2 /
 private link / CMEK, and 24/7 support offerings.
 
+## Code of conduct
+
+This project follows the [Contributor Covenant](CODE_OF_CONDUCT.md). Report
+unacceptable behavior to **security@vinya.ai**.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the

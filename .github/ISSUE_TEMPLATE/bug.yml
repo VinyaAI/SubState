@@ -1,0 +1,70 @@
+name: Bug report
+description: Something is broken or unexpected in SubState
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. For security issues, do **not** use this form — open a [private advisory](https://github.com/VinyaAI/SubState/security/advisories/new) or email **security@vinya.ai**.
+
+  - type: input
+    id: version
+    attributes:
+      label: Commit / version
+      description: Commit SHA, tag, or crate version you are running.
+      placeholder: e.g. main @ abc1234 or 0.1.0-alpha
+    validations:
+      required: true
+
+  - type: dropdown
+    id: source
+    attributes:
+      label: Source type involved
+      description: Which data source(s) are relevant, if any.
+      multiple: true
+      options:
+        - Postgres
+        - MySQL
+        - MongoDB
+        - Kafka
+        - None / not source-related
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What you expected to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead. Include logs or error messages if useful.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps, schema snippets, or commands that reproduce the issue.
+      placeholder: |
+        1. …
+        2. …
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks run
+      options:
+        - label: `cargo test`
+        - label: `./scripts/smoke.sh` (if serve / boot / WS / ingest / Postgres follow changed)
+        - label: TypeScript client build (if `clients/typescript` is involved)
