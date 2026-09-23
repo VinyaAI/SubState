@@ -7,6 +7,8 @@ etc). Instead of polling the database and pushing a different set of changes
 to every user, SubState keeps a live database and syncs each subscription as
 the data changes.
 
+**[Live rideshare demo](https://vinyaai.github.io/substate-demo/)** — auto-running command center simulation.
+
 ![Sources to SubState to subscribers](images/SubState_Intro.png)
 
 ## Contents
@@ -337,6 +339,7 @@ and pass `DATABASE_URL` / `SCHEMA_PATH` at runtime.
 
 ## Learn more
 
+- [Live rideshare demo](https://vinyaai.github.io/substate-demo/) — auto-running command center simulation
 - [SubState.md](SubState.md) — long-term vision and design notes
 - [docs/schema.md](docs/schema.md) — sync schema reference
 - [docs/api.md](docs/api.md) — `/v1` surface and stability notes
