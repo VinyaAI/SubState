@@ -1,14 +1,15 @@
 SubState Architecture
 
-Open-Source Real-Time State Synchronization Engine
+Long-form design notes for SubState — an open-source streaming API
+and real-time database.
 
-Status: Working architecture
+Status: 0.1.0-alpha
 Date: September 2026
 
 1. What SubState Is
 
-SubState is an open-source engine for keeping each user's relevant
-application state synchronized with continuously changing backend state.
+SubState keeps each user's relevant application state synchronized
+with continuously changing backend data.
 
 Companies may have data spread across databases, event streams, caches,
 APIs, and telemetry systems. Different users need different live subsets
@@ -18,7 +19,7 @@ Maintain a current unified view of operational state, determine who
 cares when it changes, and keep each user's state synchronized.
 
 SubState does not replace Postgres, Kafka, Redis, or other systems of
-record.
+record. This file is the architecture behind the README.
 
 2. High-Level Architecture
 
@@ -53,8 +54,13 @@ User State: What should this user currently have?
 
 SubState connects to existing systems rather than replacing them.
 
-Long-term examples include Postgres, MySQL, MongoDB, Kafka, Redis, MQTT,
-HTTP/SDK inputs, APIs, and telemetry streams.
+Ships today: Postgres (snapshot + CDC or poll), MySQL (poll), MongoDB
+(poll), Kafka (JSON, including Debezium unwrap), and HTTP ingest
+(`POST /v1/ingest`). The TypeScript client talks to that HTTP/WebSocket
+surface.
+
+Not in this tree yet: Redis, MQTT, Oracle, and a full Schema Registry /
+Avro / Protobuf pipeline.
 
 Different sources may contribute fields to the same logical entity:
 
@@ -154,15 +160,20 @@ every transition matters, whether updates can be coalesced, and how
 source records map to logical entities.
 
 `substate init` can propose this file from a Postgres catalog and
-sampled Kafka topics; you can also write it by hand. Either way the CDS
-never guesses merge behavior at runtime.
+sampled Kafka topics; you can also write it by hand. MySQL and Mongo
+sources are serve-time only — add them to the YAML yourself, then set
+`MYSQL_URL` / `MONGO_URL`. Either way the CDS never guesses merge
+behavior at runtime.
 
 Discover structure automatically. Infer cautiously. Confirm authority,
 identity, and field modes before `serve`.
 
-Field remapping (`column` / `path`), merge-into-existing `init`, `ttl_ms`,
-and one-hop relations are implemented. Later work (not in this prototype):
-Schema Registry / Avro / Protobuf.
+Also implemented: `column` / `path` remaps, merge-into-existing `init`,
+`ttl_ms`, `flush_ms`, one-hop `relations`, composite `identity.fields`,
+and `http` / `mysql` / `mongodb` source types. Full vocabulary:
+[docs/schema.md](docs/schema.md).
+
+Later work: Schema Registry / Avro / Protobuf.
 
 6. Source Authority and Versions
 
@@ -184,7 +195,7 @@ version. Otherwise discard it.
 
 For GPS-like data, sequence determines ordering. A timestamp such as
 observed_at may describe freshness but should not determine ordering
-in the prototype.
+in this alpha.
 
 7. Transactional vs. Latest-Value State
 
@@ -200,7 +211,8 @@ can become:
 
 E
 
-For the prototype, latest-value fields can use a 100 ms flush interval.
+Latest-value fields can use a 100 ms flush interval (default when
+`flush_ms` is omitted).
 
 Only deltas actually emitted to a user receive user-stream sequence
 numbers. Coalesced internal updates do not consume those numbers.
@@ -235,9 +247,11 @@ subscriptions depending on driver.status
         ↓
 candidate subscriptions
 
-The prototype can use coarse field-level dependency indexes. Later
-versions may add value-level, range, spatial/H3, and shared-predicate
-indexes.
+The index is coarse and field-level: a change on `status` only
+considers subscriptions that depend on `status`. Filters already
+support equality, comparisons (`gt` / `gte` / `lt` / `lte`), and
+`$or` / `$and`. Later work may add value-level, spatial/H3, and
+shared-predicate indexes.
 
 9. Creating a Subscription
 
@@ -367,9 +381,7 @@ resume_after = 1042
 If retained history contains later deltas, SubState replays them.
 Otherwise it sends a fresh snapshot from the CDS.
 
-For the prototype, retain:
-
-last 500 delivered deltas per subscription
+Retain about the last 500 delivered deltas per subscription.
 
 If the resume point is older than retained history:
 
@@ -392,51 +404,51 @@ When the WebSocket send buffer backs up, SubState stops broadcasting live
 deltas to that session. On recovery it sends `reset` plus a fresh snapshot
 from the CDS (same shape as an out-of-window resume).
 
-16. Prototype Architecture
+16. Current Implementation
 
-                 POSTGRES
-            drivers + jobs
-                  │
-          snapshot + CDC
-           (poll fallback)
-                  │
-                  ▼
-            ┌───────────┐
-            │    CDS    │
-            └─────┬─────┘
-              ▲         ▲
-              │         │
-      HTTP / SDK       Kafka
-      any source     location /
-       via ingest    data bus
-              │         │
-              └────┬────┘
-                   │
-                   ▼
-          Subscription Index
-                   │
-                   ▼
-              User State
-                   │
-            ordered deltas
-                   │
-                   ▼
-               WebSocket
-                   │
-                   ▼
-            Dispatcher Map
+                 POSTGRES          MYSQL / MONGO
+            drivers + jobs            poll
+                  │                     │
+          snapshot + CDC                │
+           (poll fallback)              │
+                  │                     │
+                  └──────────┬──────────┘
+                             ▼
+                       ┌───────────┐
+                       │    CDS    │
+                       └─────┬─────┘
+                         ▲         ▲
+                         │         │
+                 HTTP ingest      Kafka
+                 POST /v1/ingest  JSON / Debezium
+                         │         │
+                         └────┬────┘
+                              │
+                              ▼
+                     Subscription Index
+                              │
+                              ▼
+                         User State
+                              │
+                       ordered deltas
+                              │
+                              ▼
+                          WebSocket
+                              │
+                              ▼
+                       Dispatcher Map
 
 Postgres bootstraps mapped tables into the CDS at startup, then follows
 the WAL through a `pgoutput` slot when `wal_level=logical`. Otherwise it
-re-reads tables on a timer.
+re-reads tables on a timer. MySQL and Mongo poll on `CDS_POLL_MS`.
 
-Kafka consumers map JSON messages onto schema-owned fields. Anything else
-can POST `/v1/ingest`. All three paths become the same inbox message
+Kafka consumers map JSON messages onto schema-owned fields. HTTP sources
+can POST `/v1/ingest`. All of these paths become the same inbox message
 before the CDS merges.
 
 The core architecture does not change when a new adapter is added.
 
-17. Prototype Technology
+17. Technology
 
 Current preferred implementation:
 
@@ -450,7 +462,7 @@ Logging:         tracing
 Browser client:  TypeScript
 Reference UI:    TypeScript / React
 
-Keep the first implementation simple:
+Keep the data plane simple:
 
 CDS:
 HashMap<EntityId, EntityState>
@@ -465,7 +477,7 @@ Delta history:
 VecDeque<Delta>
 
 Do not introduce a custom storage engine, distributed consensus, or
-complex concurrency architecture into the prototype.
+complex concurrency architecture in this alpha.
 
 18. Open-Source Deployment Model
 
@@ -487,8 +499,9 @@ Event streams ──┤
 SubState should be useful without requiring production operational data
 to pass through a hosted SubState service.
 
-Production-grade deployment, clustering, upgrades, and observability are
-not part of the first prototype.
+The alpha is a single process with a local disk snapshot, optional
+`SUBSTATE_API_KEY`, and Prometheus-style `GET /metrics`. Clustering,
+multi-node upgrades, and a hosted control plane are not in this tree.
 
 19. Deferred Problems
 
