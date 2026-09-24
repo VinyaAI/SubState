@@ -7,3 +7,4 @@ substate-snapshot.json
 substate-snapshot.json.tmp
 substate-kafka-offsets.json
 substate-rideshare-demo/
+.DS_Store
