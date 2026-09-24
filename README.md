@@ -9,7 +9,11 @@ the data changes.
 
 ## Uber Simulation using SubState Architecture
 
+A rideshare app has millions of customers accessing thousands of data points every single day. The video below is a simulation of the Uber app highlighting the combination of different data sources in a real-time environment.
+
 ![Uber simulation recording 1](media/UberSimulationRecording1.gif)
+
+The video below shows the architecture of SubState and how it handles updating subscribers with real-time data. More information on how SubState works can be found in the [Architecture of SubState](#architecture-of-substate) section. 
 
 ![Uber simulation recording 2](media/UberSimulationRecording2.gif)
 
