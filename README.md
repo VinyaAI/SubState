@@ -14,7 +14,7 @@ A rideshare app has millions of customers accessing thousands of data points eve
 
 ![Uber simulation recording 1](media/UberSimulationRecording1.gif)
 
-The video below shows the architecture of SubState and how it handles updating subscribers with real-time data. More information on how SubState works can be found in the [Architecture of SubState](#architecture-of-substate) section. 
+The video below shows the architecture of SubState and how it handles updating subscribers with real-time data. Continuing with the Uber example, this video shows the three main components of SubState: Current Data State (CDS), Subscription Index & User State. The CDS merges all the data sources into one central current database that houses only the live data. The Subscription Index keeps track of each individual query (Subscription) and a record of who needs to be updated with what. Lastly, the User State keeps track of the user's current data image so that only the new updates are sent and synced with the user's copy. More information on how SubState works can be found in the [Architecture of SubState](#architecture-of-substate) section. 
 
 ![Uber simulation recording 2](media/UberSimulationRecording2.gif)
 
