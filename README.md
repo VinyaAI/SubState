@@ -9,11 +9,11 @@ the data changes.
 
 **[Uber Simulation](https://vinyaai.github.io/substate-demo/)**
 
-<video src="media/UberSimulationRecording1.mov" autoplay loop muted playsinline controls width="100%"></video>
+![Uber simulation recording 1](media/UberSimulationRecording1.gif)
 
-<video src="media/UberSimulationRecording2.mov" autoplay loop muted playsinline controls width="100%"></video>
+![Uber simulation recording 2](media/UberSimulationRecording2.gif)
 
-![Sources to SubState to subscribers](images/SubState_Intro.png)
+![Sources to SubState to subscribers](media/SubState_Intro.png)
 
 ## Contents
 - [Quickstart](#quickstart)
@@ -98,7 +98,7 @@ SubState can be divided into 3 separate parts.
 
 ### 1. CDS (Current Database State)
 
-![Current Database State](images/CDS.png)
+![Current Database State](media/CDS.png)
 
 The CDS is an in-memory copy of your data. SubState pulls from all of your
 data sources and merges them into one central reference copy.
@@ -180,7 +180,7 @@ told when that set changes (e.g., new drivers become available, a driver
 goes out of range, a driver accepts a different ride, etc). In SubState,
 this query runs against the CDS, not against your database.
 
-![Subscription Index](images/SubscriptionIndex.png)
+![Subscription Index](media/SubscriptionIndex.png)
 
 The Subscription Index keeps track of every open subscription that a user
 has. When any record in the CDS changes (e.g., new driver becomes
@@ -236,7 +236,7 @@ same reason unless its filter also depends on that field.
 
 ### 3. User State
 
-![User State](images/User_State.png)
+![User State](media/User_State.png)
 
 User State is the mirror image of what data the user currently has.
 
