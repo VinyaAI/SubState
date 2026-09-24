@@ -7,13 +7,11 @@ etc). Instead of polling the database and pushing a different set of changes
 to every user, SubState keeps a live database and syncs each subscription as
 the data changes.
 
-**[Uber Simulation](https://vinyaai.github.io/substate-demo/)**
+## Uber Simulation using SubState Architecture
 
 ![Uber simulation recording 1](media/UberSimulationRecording1.gif)
 
 ![Uber simulation recording 2](media/UberSimulationRecording2.gif)
-
-![Sources to SubState to subscribers](media/SubState_Intro.png)
 
 ## Contents
 - [Quickstart](#quickstart)
@@ -93,6 +91,8 @@ Env template: [.env.example](.env.example).
 snapshot. See [CHANGELOG.md](CHANGELOG.md).
 
 ## Architecture of SubState
+
+![Sources to SubState to subscribers](media/SubState_Intro.png)
 
 SubState can be divided into 3 separate parts.
 
