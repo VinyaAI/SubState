@@ -7,7 +7,11 @@ etc). Instead of polling the database and pushing a different set of changes
 to every user, SubState keeps a live database and syncs each subscription as
 the data changes.
 
-**[Live rideshare demo](https://vinyaai.github.io/substate-demo/)** — auto-running command center simulation.
+**[Uber Simulation](https://vinyaai.github.io/substate-demo/)**
+
+<video src="media/UberSimulationRecording1.mov" autoplay loop muted playsinline controls width="100%"></video>
+
+<video src="media/UberSimulationRecording2.mov" autoplay loop muted playsinline controls width="100%"></video>
 
 ![Sources to SubState to subscribers](images/SubState_Intro.png)
 
