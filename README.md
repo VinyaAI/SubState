@@ -7,6 +7,7 @@ etc). Instead of polling the database and pushing a different set of changes
 to every user, SubState keeps a live database and syncs each subscription as
 the data changes.
 
+
 ## Uber Simulation using SubState Architecture
 
 A rideshare app has millions of customers accessing thousands of data points every single day. The video below is a simulation of the Uber app highlighting the combination of different data sources in a real-time environment.
@@ -17,11 +18,13 @@ The video below shows the architecture of SubState and how it handles updating s
 
 ![Uber simulation recording 2](media/UberSimulationRecording2.gif)
 
+
 ## Contents
 - [Quickstart](#quickstart)
 - [Architecture of SubState](#architecture-of-substate)
 - [Contributing](#contributing--security)
 - [Learn more](#learn-more)
+
 
 ## Quickstart
 
@@ -65,6 +68,7 @@ curl http://127.0.0.1:8080/health
 Subscribe on `ws://127.0.0.1:8080/v1/sync` (snapshot, then deltas). See
 [docs/api.md](docs/api.md).
 
+
 ### Verify (smoke)
 
 On a machine with Docker, Rust, and **Node 20+**:
@@ -94,7 +98,10 @@ Env template: [.env.example](.env.example).
 **Alpha:** one process; after about 500 deltas a subscription resets to a
 snapshot. See [CHANGELOG.md](CHANGELOG.md).
 
+
 ## Architecture of SubState
+
+SubState is an open-source streaming API and real-time database. It keeps a live copy of data from your existing sources and syncs each user to the subset they subscribed to, as that data changes.
 
 ![Sources to SubState to subscribers](media/SubState_Intro.png)
 
@@ -278,6 +285,7 @@ user_state {
 If a new available driver appears in Chicago, they are added. A user
 searching in New York is not sent these messages.
 
+
 ## Contributing & security
 
 - [CONTRIBUTING.md](CONTRIBUTING.md)
@@ -285,6 +293,7 @@ searching in New York is not sent these messages.
 - [SECURITY.md](SECURITY.md)
 - [LICENSE](LICENSE) (Apache-2.0)
 - [CHANGELOG.md](CHANGELOG.md)
+
 
 ## Learn more
 
